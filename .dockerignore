@@ -1,0 +1,17 @@
+.venv
+.work
+.git
+.gitignore
+__pycache__
+*.pyc
+*.pyo
+*.mp4
+*.mov
+*.mkv
+*.wav
+*.mp3
+agent-transcripts
+terminals
+firebase_config.json
+*.md
+!README.md

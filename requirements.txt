@@ -8,6 +8,8 @@ tqdm>=4.66.0
 uharfbuzz>=0.40.0
 freetype-py>=2.4.0
 Pillow>=10.0.0
+uvicorn[standard]>=0.30.0
+fastapi>=0.115.0
 # Optional — required for Video → Song AI (vocal / music split + singing)
 demucs>=4.0.0
 torch

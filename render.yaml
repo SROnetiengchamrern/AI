@@ -1,0 +1,31 @@
+# Render Blueprint — https://render.com/docs/blueprint-spec
+# Deploy: connect GitHub repo → New Blueprint → select this file
+#
+# IMPORTANT: Free/Starter (512 MB RAM) is too small for Whisper + Demucs.
+# Use at least Standard (2 GB RAM) for reliable video jobs.
+
+services:
+  - type: web
+    name: khmer-ai-video-tools
+    runtime: docker
+    plan: standard
+    region: singapore
+    healthCheckPath: /
+    envVars:
+      - key: FIREBASE_REQUIRE_LOGIN
+        value: "0"
+      - key: PYTHONUNBUFFERED
+        value: "1"
+      # Optional Firebase (uncomment and set in Render dashboard instead of committing secrets):
+      # - key: FIREBASE_API_KEY
+      #   sync: false
+      # - key: FIREBASE_AUTH_DOMAIN
+      #   sync: false
+      # - key: FIREBASE_PROJECT_ID
+      #   sync: false
+      # - key: FIREBASE_STORAGE_BUCKET
+      #   sync: false
+      # - key: FIREBASE_MESSAGING_SENDER_ID
+      #   sync: false
+      # - key: FIREBASE_APP_ID
+      #   sync: false
