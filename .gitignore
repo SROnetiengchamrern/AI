@@ -1,0 +1,11 @@
+output/
+.work/
+.tools/
+__pycache__/
+*.pyc
+.venv/
+venv/
+_sample_*.mp4
+*.wav
+.DS_Store
+firebase_config.json

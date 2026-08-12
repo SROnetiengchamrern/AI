@@ -1,0 +1,126 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Login · Khmer AI Video</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <link
+      href="https://fonts.googleapis.com/css2?family=Fraunces:opsz,wght@9..144,600;9..144,700&family=Source+Sans+3:wght@400;600;700&display=swap"
+      rel="stylesheet"
+    />
+    <link rel="stylesheet" href="/auth/auth.css" />
+  </head>
+  <body>
+    <main class="shell">
+      <div class="brand">
+        <p class="brand-mark">Khmer AI Video</p>
+        <p>Sign in to generate &amp; convert videos</p>
+      </div>
+
+      <section class="card">
+        <h1>Welcome back</h1>
+        <p class="sub">Continue with a provider, or use email.</p>
+
+        <div id="social-slot"></div>
+        <p class="msg" id="msg" aria-live="polite"></p>
+
+        <div class="divider">or</div>
+
+        <form id="login-form" autocomplete="on">
+          <div class="field">
+            <label for="email">Email</label>
+            <input id="email" type="email" required placeholder="you@example.com" autocomplete="email" />
+          </div>
+          <div class="field">
+            <label for="password">Password</label>
+            <input
+              id="password"
+              type="password"
+              required
+              minlength="6"
+              placeholder="••••••••"
+              autocomplete="current-password"
+            />
+          </div>
+          <button class="primary" id="submit-btn" type="submit">Log in with email</button>
+        </form>
+
+        <p class="footer">
+          New here?
+          <a id="register-link" href="/auth/register.html">Create an account</a>
+        </p>
+        <div class="hint" id="setup-hint" hidden></div>
+        <div class="hint">
+          Enable providers in Firebase Console → Authentication → Sign-in method
+          (Google, GitHub, Apple, Email/Password…).
+          <a
+            href="https://console.firebase.google.com/project/ai-khmer-generate/authentication/providers"
+            target="_blank"
+            rel="noopener"
+            >Open providers</a
+          >
+        </div>
+      </section>
+    </main>
+
+    <script type="module">
+      import {
+        qs,
+        setMsg,
+        friendlyAuthError,
+        goToApp,
+        requireAuthRedirect,
+        SOCIAL_BUTTONS_HTML,
+        wireSocialButtons,
+      } from "/auth/auth.js";
+
+      qs("social-slot").innerHTML = SOCIAL_BUTTONS_HTML;
+
+      const form = qs("login-form");
+      const msg = qs("msg");
+      const btn = qs("submit-btn");
+      const hint = qs("setup-hint");
+
+      const next = new URLSearchParams(location.search).get("next");
+      if (next) {
+        qs("register-link").href = `/auth/register.html?next=${encodeURIComponent(next)}`;
+      }
+
+      let auth;
+      let cfg;
+      try {
+        ({ auth, cfg } = await requireAuthRedirect());
+        wireSocialButtons(auth, cfg, msg);
+      } catch (err) {
+        hint.hidden = false;
+        hint.textContent = friendlyAuthError(err);
+        setMsg(msg, friendlyAuthError(err), "error");
+      }
+
+      form.addEventListener("submit", async (e) => {
+        e.preventDefault();
+        if (!auth) {
+          setMsg(msg, "Firebase is not configured yet.", "error");
+          return;
+        }
+        const email = qs("email").value.trim();
+        const password = qs("password").value;
+        btn.disabled = true;
+        setMsg(msg, "Signing in…");
+        try {
+          const { signInWithEmailAndPassword } = await import(
+            "https://www.gstatic.com/firebasejs/11.0.2/firebase-auth.js"
+          );
+          await signInWithEmailAndPassword(auth, email, password);
+          setMsg(msg, "Success — opening app…", "ok");
+          goToApp();
+        } catch (err) {
+          setMsg(msg, friendlyAuthError(err), "error");
+          btn.disabled = false;
+        }
+      });
+    </script>
+  </body>
+</html>

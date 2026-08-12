@@ -1,0 +1,17 @@
+gradio>=5.0.0
+faster-whisper>=1.1.0
+deep-translator>=1.11.4
+edge-tts>=7.0.0
+srt>=3.5.3
+imageio-ffmpeg>=0.5.1
+tqdm>=4.66.0
+uharfbuzz>=0.40.0
+freetype-py>=2.4.0
+Pillow>=10.0.0
+# Optional — required for Video → Song AI (vocal / music split + singing)
+demucs>=4.0.0
+torch
+torchaudio
+librosa>=0.10.0
+soundfile>=0.12.0
+numpy>=1.24.0

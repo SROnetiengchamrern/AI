@@ -1,0 +1,155 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Register · Khmer AI Video</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <link
+      href="https://fonts.googleapis.com/css2?family=Fraunces:opsz,wght@9..144,600;9..144,700&family=Source+Sans+3:wght@400;600;700&display=swap"
+      rel="stylesheet"
+    />
+    <link rel="stylesheet" href="/auth/auth.css" />
+  </head>
+  <body>
+    <main class="shell">
+      <div class="brand">
+        <p class="brand-mark">Khmer AI Video</p>
+        <p>Create your account to get started</p>
+      </div>
+
+      <section class="card">
+        <h1>Create account</h1>
+        <p class="sub">Continue with a provider, or register with email.</p>
+
+        <div id="social-slot"></div>
+        <p class="msg" id="msg" aria-live="polite"></p>
+
+        <div class="divider">or</div>
+
+        <form id="register-form" autocomplete="on">
+          <div class="field">
+            <label for="name">Display name (optional)</label>
+            <input id="name" type="text" placeholder="Your name" autocomplete="name" />
+          </div>
+          <div class="field">
+            <label for="email">Email</label>
+            <input id="email" type="email" required placeholder="you@example.com" autocomplete="email" />
+          </div>
+          <div class="row">
+            <div class="field">
+              <label for="password">Password</label>
+              <input
+                id="password"
+                type="password"
+                required
+                minlength="6"
+                placeholder="Min 6 characters"
+                autocomplete="new-password"
+              />
+            </div>
+            <div class="field">
+              <label for="password2">Confirm</label>
+              <input
+                id="password2"
+                type="password"
+                required
+                minlength="6"
+                placeholder="Repeat password"
+                autocomplete="new-password"
+              />
+            </div>
+          </div>
+          <button class="primary" id="submit-btn" type="submit">Register with email</button>
+        </form>
+
+        <p class="footer">
+          Already have an account?
+          <a id="login-link" href="/auth/login.html">Log in</a>
+        </p>
+        <div class="hint" id="setup-hint" hidden></div>
+        <div class="hint">
+          Enable providers in Firebase Console → Authentication → Sign-in method
+          (Google, GitHub, Apple, Email/Password…).
+          <a
+            href="https://console.firebase.google.com/project/ai-khmer-generate/authentication/providers"
+            target="_blank"
+            rel="noopener"
+            >Open providers</a
+          >
+        </div>
+      </section>
+    </main>
+
+    <script type="module">
+      import {
+        qs,
+        setMsg,
+        friendlyAuthError,
+        goToApp,
+        requireAuthRedirect,
+        SOCIAL_BUTTONS_HTML,
+        wireSocialButtons,
+      } from "/auth/auth.js";
+
+      qs("social-slot").innerHTML = SOCIAL_BUTTONS_HTML;
+
+      const form = qs("register-form");
+      const msg = qs("msg");
+      const btn = qs("submit-btn");
+      const hint = qs("setup-hint");
+
+      const next = new URLSearchParams(location.search).get("next");
+      if (next) {
+        qs("login-link").href = `/auth/login.html?next=${encodeURIComponent(next)}`;
+      }
+
+      let auth;
+      let cfg;
+      try {
+        ({ auth, cfg } = await requireAuthRedirect());
+        wireSocialButtons(auth, cfg, msg);
+      } catch (err) {
+        hint.hidden = false;
+        hint.textContent = friendlyAuthError(err);
+        setMsg(msg, friendlyAuthError(err), "error");
+      }
+
+      form.addEventListener("submit", async (e) => {
+        e.preventDefault();
+        if (!auth) {
+          setMsg(msg, "Firebase is not configured yet.", "error");
+          return;
+        }
+
+        const name = qs("name").value.trim();
+        const email = qs("email").value.trim();
+        const password = qs("password").value;
+        const password2 = qs("password2").value;
+
+        if (password !== password2) {
+          setMsg(msg, "Passwords do not match.", "error");
+          return;
+        }
+
+        btn.disabled = true;
+        setMsg(msg, "Creating account…");
+        try {
+          const { createUserWithEmailAndPassword, updateProfile } = await import(
+            "https://www.gstatic.com/firebasejs/11.0.2/firebase-auth.js"
+          );
+          const cred = await createUserWithEmailAndPassword(auth, email, password);
+          if (name) {
+            await updateProfile(cred.user, { displayName: name });
+          }
+          setMsg(msg, "Account created — opening app…", "ok");
+          goToApp();
+        } catch (err) {
+          setMsg(msg, friendlyAuthError(err), "error");
+          btn.disabled = false;
+        }
+      });
+    </script>
+  </body>
+</html>
