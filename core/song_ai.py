@@ -44,6 +44,8 @@ SONG_AI_VOICES = {
     "Korean — Female": "ko-KR-SunHiNeural",
     "Spanish — Female": "es-ES-ElviraNeural",
     "French — Female": "fr-FR-DeniseNeural",
+    "Urdu (Pakistan) — Female": "ur-PK-UzmaNeural",
+    "Urdu (Pakistan) — Male": "ur-PK-AsadNeural",
 }
 
 _LANG_DEFAULT_VOICE = {
@@ -59,6 +61,7 @@ _LANG_DEFAULT_VOICE = {
     "id": "id-ID-GadisNeural",
     "km": "km-KH-SreymomNeural",
     "hi": "hi-IN-SwaraNeural",
+    "ur": "ur-PK-UzmaNeural",
     "ru": "ru-RU-SvetlanaNeural",
     "ar": "ar-SA-ZariyahNeural",
     "ms": "ms-MY-YasminNeural",

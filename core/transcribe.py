@@ -128,6 +128,7 @@ _SONG_PROMPTS: dict[str, str] = {
     "de": "Songtext",
     "id": "lirik lagu",
     "hi": "गाने के बोल",
+    "ur": "گانے کے بول",
     "ru": "текст песни",
     "ar": "كلمات الأغنية",
     "ms": "lirik lagu",

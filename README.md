@@ -77,4 +77,4 @@ Downloads from the UI: AI video (`.mp4`) + AI voice track.
 
 ## Supported source languages
 
-Auto-detect, English, Chinese, Japanese, Korean, Thai, Vietnamese, French, Spanish, German, Indonesian, Malay, Hindi, Russian, Arabic, and other languages Whisper understands.
+Auto-detect, English, Chinese, Japanese, Korean, Thai, Vietnamese, French, Spanish, German, Indonesian, Malay, Hindi, Urdu (Pakistan), Russian, Arabic, and other languages Whisper understands.

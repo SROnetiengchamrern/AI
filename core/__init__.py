@@ -26,6 +26,7 @@ SOURCE_LANGUAGES = {
     "id": "Indonesian",
     "ms": "Malay",
     "hi": "Hindi",
+    "ur": "Urdu (Pakistan)",
     "ru": "Russian",
     "ar": "Arabic",
 }
