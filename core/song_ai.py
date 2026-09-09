@@ -1,12 +1,12 @@
-"""Video song → remove ALL original audio → AI sings same lyrics (no translate).
+"""Video song → replace singer with AI voice · keep music · no translate.
 
 Flow:
   1) Extract audio from the music video
-  2) Separate vocals vs instrumental (Demucs) — for lyrics + melody only
-  3) Discard original singer AND background music from the final mix
+  2) Separate vocals vs instrumental (Demucs)
+  3) Remove original singer from the mix (keep music bed by default)
   4) Transcribe original lyrics (same language — never translate)
   5) Generate AI singing vocals (melody-matched when possible)
-  6) Replace video audio with AI singing only (optional: mix music bed back)
+  6) Mix AI vocals + music bed → replace video audio
 """
 
 from __future__ import annotations
@@ -386,15 +386,15 @@ def create_song_ai_video(
     video_note: str = "AI Song",
     vocal_volume: float = 2.0,
     music_volume: float = 0.65,
-    keep_music_bed: bool = False,
+    keep_music_bed: bool = True,
     enable_singing: bool = True,
     fast: bool = True,
     progress_cb=None,
 ) -> SongAIResult:
     """
-    Music video → strip ALL original audio → AI sings the same lyrics.
-    No translation. Default final mix is AI vocals only (no background music).
-    Set keep_music_bed=True to optionally mix the cleaned instrumental back in.
+    Music video → replace singer with AI · keep music · same lyrics.
+    No translation. Default mix = AI vocals + instrumental music bed.
+    Set keep_music_bed=False for AI singing only (no instrumental).
     """
 
     def tick(msg: str, frac: float) -> None:
@@ -413,9 +413,10 @@ def create_song_ai_video(
     mix_wav = extract_audio(video, work / "song_mix.wav")
     duration = get_duration_seconds(mix_wav)
 
-    tick("Removing ALL original sound (singer + background)…", 0.22)
+    tick("Separating singer from music (remove original voice)…", 0.22)
     vocals, music_raw = separate_vocals_and_music(mix_wav, work / "stems")
-    # vocals / music_raw are references only unless keep_music_bed is on
+    # vocals = lyrics/melody reference only (never mixed as original singer)
+    tick("Cleaning music bed…", 0.32)
     music = scrub_instrumental(music_raw, work / "music_bed_clean.wav")
 
     tick("Reading lyrics (no translation)…", 0.42)
@@ -465,11 +466,11 @@ def create_song_ai_video(
     tts_voice = resolve_song_voice(voice_label, effective_lang)
     tick(f"AI voice: {tts_voice} · lyric lines: {len(speak_segments)}", 0.62)
 
-    tick("Converting sound → AI singing (same lyrics, no translate)…", 0.68)
+    tick("Changing singer sound → AI voice (same lyrics)…", 0.68)
     ai_vocals, spoken = synthesize_singing_track(
         speak_segments,
         tts_voice,
-        vocals,  # pitch reference only — never mixed into final as original audio
+        vocals,  # pitch reference only — original singer is not mixed into output
         work,
         video_duration=max(duration, get_duration_seconds(music)),
         sing=bool(enable_singing),
@@ -477,7 +478,7 @@ def create_song_ai_video(
     )
 
     if keep_music_bed:
-        tick("Optional: mixing AI vocals + music bed…", 0.82)
+        tick("Mixing AI singing + music bed…", 0.82)
         mix_path = mix_ai_vocals_with_music(
             ai_vocals,
             music,
@@ -486,7 +487,7 @@ def create_song_ai_video(
             music_volume=music_volume,
         )
     else:
-        tick("Building AI singing only (background removed)…", 0.82)
+        tick("Building AI singing only (no music bed)…", 0.82)
         mix_path = export_ai_vocals_only(
             ai_vocals,
             work / f"{stem}_ai_song.m4a",
@@ -494,7 +495,7 @@ def create_song_ai_video(
             vocal_volume=vocal_volume,
         )
 
-    tick("Replacing ALL video audio with AI singing…", 0.88)
+    tick("Replacing video audio with AI song…", 0.88)
     output_video = replace_audio(
         video,
         mix_path,
@@ -523,7 +524,7 @@ def create_song_ai_video(
         noted = work / f"{output_video.stem}_noted.mp4"
         output_video = overlay_video_note(output_video, note, noted, fast=fast)
 
-    tick("Done — original audio removed · AI sings (no translate).", 1.0)
+    tick("Done — AI voice + music · no translation.", 1.0)
     return SongAIResult(
         detected_language=transcript.language,
         lyrics_original=lyrics_original,

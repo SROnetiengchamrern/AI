@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import os
 import queue
+import re
 import tempfile
 import threading
 from pathlib import Path
@@ -67,7 +68,7 @@ SOURCE_LANGUAGES_REVERSE = {v: k for k, v in SOURCE_LANGUAGES.items()}
 def resolve_upload(file_obj) -> Path:
     """Resolve Gradio File upload value to a local Path."""
     if file_obj is None:
-        raise gr.Error("Please upload a video sample first.")
+        raise RuntimeError("Please upload a video sample first.")
 
     path: Path | None = None
     if isinstance(file_obj, (str, Path)):
@@ -81,14 +82,43 @@ def resolve_upload(file_obj) -> Path:
         candidate = getattr(file_obj, "name", None) or str(file_obj)
         path = Path(candidate)
 
-    if path is None or not path_exists_safe(path):
-        raise gr.Error(
-            "Uploaded file not found (or path too long for Windows). "
-            "Rename the video to a short name like video.mp4 and upload again."
+    if path is None:
+        raise RuntimeError("Could not read the uploaded file path. Re-upload the video.")
+
+    # Gradio may keep titles with `/` `|` → broken Windows paths; try parent search
+    if not path_exists_safe(path):
+        parent = path.parent
+        stem_hint = re.sub(r"[\\/|:*?\"<>]+", "", path.stem)[:24]
+        found = None
+        try:
+            if parent.is_dir():
+                for cand in parent.rglob("*"):
+                    if not cand.is_file():
+                        continue
+                    if cand.suffix.lower() in VIDEO_EXTS and (
+                        stem_hint.lower() in cand.name.lower()
+                        or cand.stat().st_size > 0
+                    ):
+                        # Prefer exact-ish name match; else largest video in folder
+                        if found is None or cand.stat().st_size > found.stat().st_size:
+                            if stem_hint and stem_hint.lower() in cand.name.lower():
+                                found = cand
+                                break
+                            if found is None:
+                                found = cand
+        except OSError:
+            found = None
+        if found is not None:
+            path = found
+
+    if not path_exists_safe(path):
+        raise RuntimeError(
+            "Uploaded file not found (path too long or invalid characters like / |). "
+            "Rename the video to a short name like video.mkv and upload again."
         )
 
     if path.suffix.lower() not in VIDEO_EXTS:
-        raise gr.Error(
+        raise RuntimeError(
             f"Unsupported file type '{path.suffix}'. "
             "Please upload MP4, MOV, MKV, AVI, or WebM."
         )
@@ -101,8 +131,27 @@ def _progress_status(pct: float, msg: str) -> str:
 
 
 def _loading_html(active: bool, pct: float = 0, msg: str = "Ready") -> str:
-    """Visible spinner panel while conversion runs."""
+    """Visible spinner panel while conversion runs (or idle/error/done panel)."""
     pct_i = max(0, min(100, int(round(pct))))
+    safe_msg = (msg or "Ready").replace("<", "&lt;").replace(">", "&gt;")
+    low = safe_msg.lower()
+    is_error = (not active) and low.startswith("error")
+    is_done = (not active) and (low.startswith("done") or pct_i >= 100)
+
+    if is_error:
+        return (
+            '<div class="vk-loading vk-idle" style="border-color:#c44;background:#2a1515;">'
+            '<div class="vk-dot" style="background:#e55;"></div>'
+            "<div><strong>Failed</strong>"
+            f'<div class="vk-msg">{safe_msg}</div></div></div>'
+        )
+    if is_done:
+        return (
+            '<div class="vk-loading vk-idle">'
+            '<div class="vk-dot"></div>'
+            "<div><strong>Done</strong>"
+            f'<div class="vk-msg">{safe_msg}</div></div></div>'
+        )
     if not active:
         return (
             '<div class="vk-loading vk-idle">'
@@ -111,7 +160,6 @@ def _loading_html(active: bool, pct: float = 0, msg: str = "Ready") -> str:
             "<div class=\"vk-msg\">Upload a video, then click Convert to Khmer.</div></div>"
             "</div>"
         )
-    safe_msg = (msg or "Working…").replace("<", "&lt;").replace(">", "&gt;")
     return (
         '<div class="vk-loading vk-active">'
         '<div class="vk-spinner" aria-hidden="true"></div>'
@@ -128,6 +176,49 @@ def _btn_busy():
 
 def _btn_ready():
     return gr.update(interactive=True, value="Convert to Khmer")
+
+
+def _fail_convert(exc) -> tuple:
+    """
+    Friendly failed outputs for Video → Khmer.
+    Do NOT raise gr.Error after yield — Gradio then paints every File as 'Error'.
+    Must return exactly 10 values matching run_btn.click outputs.
+    """
+    msg = str(exc)
+    summary = (
+        f"**Status:** Conversion failed\n\n"
+        f"**Error:** {msg}\n\n"
+        f"_Tip:_ Rename long titles (especially with `/` or `|`) to a short name like "
+        f"`video.mkv`, then upload again. Keep the tab open and check internet for TTS._"
+    )
+    return (
+        _loading_html(False, 0, f"Error: {msg}"),
+        0,
+        _progress_status(0, f"Error: {msg}"),
+        _btn_ready(),
+        summary,
+        gr.update(value=None),
+        gr.update(value=None),
+        gr.update(value=None),
+        gr.update(value=None),
+        gr.update(value=None),
+    )
+
+
+def _progress_tuple(pct: float, msg: str, *, busy: bool = True) -> tuple:
+    """Exactly 10 outputs: loading, bar, status, button, summary + 5 files (hold)."""
+    return (
+        _loading_html(True, pct, msg),
+        pct,
+        _progress_status(pct, msg),
+        _btn_busy() if busy else _btn_ready(),
+        gr.update(),  # summary
+        gr.update(),  # khmer_srt
+        gr.update(),  # original_srt
+        gr.update(),  # story
+        gr.update(),  # music
+        gr.update(),  # video
+    )
 
 
 def process(
@@ -147,54 +238,24 @@ def process(
     Yields: loading_html, progress_pct, progress_status, run_btn,
             summary, khmer_srt, original_srt, story_file, music_file, video_download
     """
-    video_path = resolve_upload(video)
+    try:
+        video_path = resolve_upload(video)
+    except Exception as exc:
+        yield _fail_convert(exc)
+        return
+
     out_root = Path(tempfile.mkdtemp(prefix="vk_", dir=str(preferred_temp_root())))
 
-    yield (
-        _loading_html(True, 1, "Staging upload (short path)…"),
-        1,
-        _progress_status(1, "Staging upload (short path)…"),
-        _btn_busy(),
-        gr.update(),
-        gr.update(),
-        gr.update(),
-        gr.update(),
-        gr.update(),
-        gr.update(),
-        gr.update(),
-    )
+    yield _progress_tuple(1, "Staging upload (short path)…")
 
     try:
-        # Gradio keeps long Chinese titles → WinError 206; stage as input.mp4
+        # Long titles / Hindi/Chinese chars / `/` `|` → WinError 206; stage as input.mkv
         video_path = copy_upload_to_short_path(video_path, out_root)
     except Exception as exc:
-        yield (
-            _loading_html(False, 0, f"Error: {exc}"),
-            0,
-            _progress_status(0, f"Error: {exc}"),
-            _btn_ready(),
-            gr.update(),
-            gr.update(),
-            gr.update(),
-            gr.update(),
-            gr.update(),
-            gr.update(),
-        )
-        raise gr.Error(f"Conversion failed: {exc}") from exc
+        yield _fail_convert(exc)
+        return
 
-    yield (
-        _loading_html(True, 2, "Starting…"),
-        2,
-        _progress_status(2, "Starting…"),
-        _btn_busy(),
-        gr.update(),
-        gr.update(),
-        gr.update(),
-        gr.update(),
-        gr.update(),
-        gr.update(),
-        gr.update(),
-    )
+    yield _progress_tuple(2, "Starting…")
 
     q: queue.Queue = queue.Queue()
     holder: dict = {}
@@ -204,12 +265,13 @@ def process(
 
     def worker() -> None:
         try:
+            lang = SOURCE_LANGUAGES_REVERSE.get(source_language, "auto")
             holder["result"] = convert_video_to_khmer(
                 video_path=video_path,
                 output_dir=out_root,
-                source_language=SOURCE_LANGUAGES_REVERSE[source_language],
-                model_size=MODELS[model_label],
-                mode=MODES[mode_label],
+                source_language=lang,
+                model_size=MODELS.get(model_label, "base"),
+                mode=MODES.get(mode_label, "dub_subs"),
                 voice_label=voice_label,
                 generate_story=bool(generate_story),
                 add_music=bool(add_music),
@@ -228,11 +290,10 @@ def process(
                     "Free space on C: (or clear old .work / Temp folders) and try again. "
                     f"Detail: {exc}"
                 )
-            elif "206" in msg or ("too long" in low and "path" in low):
+            elif "206" in msg or ("too long" in low and "path" in low) or "cannot find the path" in low:
                 msg = (
-                    "Windows path too long (often a long Chinese/TikTok filename). "
-                    "The app now copies to a short name automatically — re-upload and retry. "
-                    "Or rename the file to something short like video.mp4. "
+                    "Windows path / filename problem (long title or characters like / |). "
+                    "Rename to a short name like video.mkv and upload again. "
                     f"Detail: {exc}"
                 )
             elif (
@@ -250,8 +311,16 @@ def process(
                 )
             elif "edge tts" in low or ("tts" in low and ("fail" in low or "missing" in low)):
                 msg = (
-                    "Khmer voice failed on a long video (Edge TTS rate limit / network). "
+                    "Khmer voice failed (Edge TTS rate limit / network). "
                     "Wait a minute and retry, or use Burned subtitles only / Soft subtitles. "
+                    f"Detail: {exc}"
+                )
+            elif "no speech" in low:
+                msg = str(exc)
+            elif "translation" in low or "translator" in low:
+                msg = (
+                    "Translation to Khmer failed (Google Translate). "
+                    "Check internet, set Source language to Auto detect or English, then retry. "
                     f"Detail: {exc}"
                 )
             q.put(("error", RuntimeError(msg), None))
@@ -263,34 +332,11 @@ def process(
         if kind == "progress":
             pct = max(0.0, min(100.0, float(a) * 100.0))
             msg = b or ""
-            yield (
-                _loading_html(True, pct, msg),
-                pct,
-                _progress_status(pct, msg),
-                _btn_busy(),
-                gr.update(),
-                gr.update(),
-                gr.update(),
-                gr.update(),
-                gr.update(),
-                gr.update(),
-                gr.update(),
-            )
+            yield _progress_tuple(pct, msg)
         elif kind == "error":
-            yield (
-                _loading_html(False, 0, f"Error: {a}"),
-                0,
-                _progress_status(0, f"Error: {a}"),
-                _btn_ready(),
-                gr.update(),
-                gr.update(),
-                gr.update(),
-                gr.update(),
-                gr.update(),
-                gr.update(),
-                gr.update(),
-            )
-            raise gr.Error(f"Conversion failed: {a}") from a
+            # Yield friendly UI and return — do not raise gr.Error (hides the real message)
+            yield _fail_convert(a)
+            return
         elif kind == "done":
             result = holder["result"]
             extras = []
@@ -506,19 +552,21 @@ def process_song_ai(
     try:
         video_path = copy_upload_to_short_path(video_path, out_root)
     except Exception as exc:
+        msg = str(exc)
+        summary = f"**Status:** Song AI failed\n\n**Error:** {msg}"
         yield (
-            _loading_html(False, 0, f"Error: {exc}"),
+            _loading_html(False, 0, f"Error: {msg}"),
             0,
-            _progress_status(0, f"Error: {exc}"),
+            _progress_status(0, f"Error: {msg}"),
             _btn_ready_song(),
-            gr.update(),
-            gr.update(),
-            gr.update(),
-            gr.update(),
-            gr.update(),
-            gr.update(),
+            summary,
+            None,
+            None,
+            None,
+            None,
+            None,
         )
-        raise gr.Error(f"Song AI failed: {exc}") from exc
+        return
 
     q: queue.Queue = queue.Queue()
     holder: dict = {}
@@ -568,19 +616,21 @@ def process_song_ai(
                 gr.update(),
             )
         elif kind == "error":
+            msg = str(a)
+            summary = f"**Status:** Song AI failed\n\n**Error:** {msg}"
             yield (
-                _loading_html(False, 0, f"Error: {a}"),
+                _loading_html(False, 0, f"Error: {msg}"),
                 0,
-                _progress_status(0, f"Error: {a}"),
+                _progress_status(0, f"Error: {msg}"),
                 _btn_ready_song(),
-                gr.update(),
-                gr.update(),
-                gr.update(),
-                gr.update(),
-                gr.update(),
-                gr.update(),
+                summary,
+                None,
+                None,
+                None,
+                None,
+                None,
             )
-            raise gr.Error(f"Song AI failed: {a}") from a
+            return
         elif kind == "done":
             result = holder["result"]
             lyrics_preview = (result.lyrics_ai or result.lyrics_khmer or "")[:1200]
@@ -588,13 +638,13 @@ def process_song_ai(
             if len(full_lyrics) > 1200:
                 lyrics_preview += "…"
             bed_note = (
-                "AI vocals + optional music bed"
+                "AI singing + music bed (original singer removed)"
                 if keep_music_bed
-                else "AI singing only (all original audio removed)"
+                else "AI singing only (no music bed)"
             )
             summary = (
                 f"**Status:** AI Song ready\n\n"
-                f"**Original audio:** removed (singer + background)\n\n"
+                f"**Original singer:** removed → replaced with **AI voice**\n\n"
                 f"**Output audio:** {bed_note}\n\n"
                 f"**Lyrics:** same language · **no translation**\n\n"
                 f"**Detected language:** `{result.detected_language}`\n\n"
@@ -887,7 +937,7 @@ def build_ui() -> gr.Blocks:
             # Khmer AI Video Tools
             **Tab 1:** Upload a video → Khmer voice / subtitles (translates).  
             **Tab 2:** Write text → **AI voice + AI scene video**.  
-            **Tab 3:** Upload a **song video** → remove all original audio → **AI sings** (no translate).
+            **Tab 3:** Upload a **song video** → AI singing voice + keep music (**no translate**).
             """
         )
 
@@ -1180,9 +1230,9 @@ def build_ui() -> gr.Blocks:
                 gr.Markdown(
                     """
                     Upload a **song video**. The app will:
-                    1. **Remove all original sound** (singer + background music)  
-                    2. **Convert** the song to **AI singing** (same lyrics)  
-                    3. **No translation** — language stays the same as the song
+                    1. **Remove** the original singer  
+                    2. **Keep** the music / instrumental  
+                    3. **Change the singing voice to AI** (same lyrics — **no translation**)
                     """
                 )
                 with gr.Row():
@@ -1205,17 +1255,17 @@ def build_ui() -> gr.Blocks:
                         song_voice = gr.Dropdown(
                             choices=list(SONG_AI_VOICES.keys()),
                             value="Auto (match song language)",
-                            label="AI singing voice",
+                            label="AI singing voice (replaces original singer)",
                         )
                         song_sing = gr.Checkbox(
                             label="Sing mode (follow original melody) — keep ON for real singing",
                             value=True,
-                            info="Uses original pitch as a guide only. Original audio is still fully removed.",
+                            info="Uses original pitch as a guide. Original singer is still removed.",
                         )
                         song_keep_music = gr.Checkbox(
-                            label="Keep music bed (optional) — OFF = AI singing only",
-                            value=False,
-                            info="Default OFF: remove background + singer. Turn ON only if you want instrumental under AI vocals.",
+                            label="Keep music bed — ON = AI voice + music (recommended)",
+                            value=True,
+                            info="ON: music stays under AI singing. OFF: AI singing only.",
                         )
                         song_captions = gr.Checkbox(
                             label="Burn lyric captions on video (Khmer lyrics only)",
@@ -1236,7 +1286,7 @@ def build_ui() -> gr.Blocks:
                             maximum=1.2,
                             value=0.65,
                             step=0.02,
-                            label="Music bed volume (only if Keep music bed is ON)",
+                            label="Music bed volume",
                         )
                         song_vocal_vol = gr.Slider(
                             minimum=0.8,
@@ -1302,13 +1352,13 @@ def build_ui() -> gr.Blocks:
                 gr.Markdown(
                     """
                     ### Tips (Video → Song AI)
-                    - **Default:** remove **all original audio** (background + singer) → **AI sings** the same lyrics.
-                    - **No translation** — English stays English, Chinese stays Chinese, Khmer stays Khmer.
-                    - Turn **Keep music bed** ON only if you also want the instrumental under the AI voice.
+                    - **Replace singer with AI voice** · **keep music** · **no translation**.
+                    - English stays English, Chinese stays Chinese, Urdu stays Urdu, etc.
                     - Use **Tab 1 (Video → Khmer)** only if you want speech translated to Khmer.
+                    - Adjust **AI singing volume** / **Music bed volume** to balance the mix.
                     - Needs **Demucs** + singing libs: `pip install -U demucs torch torchaudio librosa soundfile`
                     - Use **Auto** voice to match the song language, or pick a voice manually.
-                    - Keep **Sing mode** ON so AI vocals follow the original melody (pitch guide only).
+                    - Keep **Sing mode** ON so AI vocals follow the original melody.
                     - Use **Small** Whisper model for clearer lyric transcription.
                     - First Demucs run downloads a model (can take a few minutes).
                     """

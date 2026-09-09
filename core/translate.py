@@ -1,4 +1,4 @@
-"""Translate text segments to Khmer (quality-focused)."""
+"""Translate text segments to Khmer (quality-focused, resilient)."""
 
 from __future__ import annotations
 
@@ -34,42 +34,104 @@ def _chunk_text(text: str, max_chars: int = 4200) -> list[str]:
     return chunks
 
 
+def _normalize_source(source: str | None) -> str:
+    src = "auto" if not source or source == "auto" else source
+    if src == "zh":
+        return "zh-CN"
+    return src
+
+
+def _looks_latin(text: str) -> bool:
+    """True when text is mostly Latin letters (English-like)."""
+    letters = re.findall(r"[A-Za-z\u00C0-\u024F]", text or "")
+    other = re.findall(
+        r"[\u0900-\u097F\u0600-\u06FF\u0E00-\u0E7F\u1780-\u17FF\u4E00-\u9FFF]",
+        text or "",
+    )
+    if not letters and not other:
+        return False
+    return len(letters) >= max(8, len(other) * 2)
+
+
+def _source_candidates(source: str | None, sample_text: str = "") -> list[str]:
+    """
+    Prefer requested source, then auto/en.
+    If UI says Hindi/Urdu but lines look English, try English first.
+    """
+    primary = _normalize_source(source)
+    if primary not in ("auto", "en") and _looks_latin(sample_text):
+        ordered = ["en", "auto", primary]
+    else:
+        ordered = [primary, "auto", "en"]
+    out: list[str] = []
+    for s in ordered:
+        if s and s not in out:
+            out.append(s)
+    return out
+
+
+def _google_once(text: str, source: str) -> str:
+    translator = GoogleTranslator(source=source, target=TARGET_LANG)
+    return (translator.translate(text) or "").strip()
+
+
 def translate_text(text: str, source: str = "auto") -> str:
+    """
+    Translate one string to Khmer with retries + source fallbacks.
+    Returns "" if all attempts fail (does not raise for TranslationNotFound).
+    """
     text = clean_source_text(text)
     if not text:
         return ""
-    src = "auto" if not source or source == "auto" else source
-    if src == "zh":
-        src = "zh-CN"
 
-    translator = GoogleTranslator(source=src, target=TARGET_LANG)
-    parts: list[str] = []
-    for chunk in _chunk_text(text):
-        translated = translator.translate(chunk) or ""
-        parts.append(clean_khmer_text(translated))
-        time.sleep(0.08)
-    return " ".join(p for p in parts if p)
+    for src in _source_candidates(source, text):
+        parts: list[str] = []
+        failed = False
+        for chunk in _chunk_text(text):
+            got = ""
+            for attempt in range(4):
+                try:
+                    got = clean_khmer_text(_google_once(chunk, src))
+                    if got:
+                        break
+                except Exception:
+                    time.sleep(0.4 * (attempt + 1))
+            if got:
+                parts.append(got)
+            else:
+                failed = True
+                break
+            time.sleep(0.08)
+        if parts and not failed:
+            return " ".join(parts)
+        if parts:
+            return " ".join(parts)
+    return ""
 
 
 def _translate_batch(texts: list[str], source: str) -> list[str]:
-    """Translate a small batch with a strong separator; fall back per-line."""
+    """Translate a small batch; fall back per-line. Never aborts the job."""
     cleaned = [clean_source_text(t) for t in texts]
     if not any(cleaned):
         return [""] * len(texts)
 
     sep = "\n¶\n"
-    src = "auto" if not source or source == "auto" else source
-    if src == "zh":
-        src = "zh-CN"
+    sample = " ".join(t for t in cleaned if t)[:240]
 
-    try:
-        translator = GoogleTranslator(source=src, target=TARGET_LANG)
-        raw = translator.translate(sep.join(cleaned)) or ""
-        parts = [clean_khmer_text(p) for p in re.split(r"\s*¶\s*", raw)]
-        if len(parts) == len(texts) and all(parts):
-            return parts
-    except Exception:
-        pass
+    for src in _source_candidates(source, sample):
+        for attempt in range(3):
+            try:
+                raw = _google_once(sep.join(cleaned), src)
+                parts = [clean_khmer_text(p) for p in re.split(r"\s*¶\s*", raw)]
+                if len(parts) == len(texts) and sum(1 for p in parts if p) >= max(
+                    1, len(texts) // 2
+                ):
+                    out: list[str] = []
+                    for i, p in enumerate(parts):
+                        out.append(p if p else translate_text(cleaned[i], source=src))
+                    return out
+            except Exception:
+                time.sleep(0.45 * (attempt + 1))
 
     return [translate_text(t, source=source) for t in cleaned]
 
@@ -86,7 +148,11 @@ def merge_nearby_segments(
         return []
 
     merged: list[Segment] = []
-    cur = Segment(start=usable[0].start, end=usable[0].end, text=clean_source_text(usable[0].text))
+    cur = Segment(
+        start=usable[0].start,
+        end=usable[0].end,
+        text=clean_source_text(usable[0].text),
+    )
     for s in usable[1:]:
         t = clean_source_text(s.text)
         gap = s.start - cur.end
@@ -143,23 +209,54 @@ def translate_transcript(
 ) -> list[Segment]:
     """
     Translate to Khmer with timestamps.
-    Quality: merge nearby lines, then translate in small batches (or per line).
+    Resilient: Google Translate misses skip a line instead of killing the job.
     """
     src = source or transcript.language or "auto"
+    sample = " ".join(s.text for s in transcript.segments[:8])
+    # Title may say Hindi/Urdu but narration is often English
+    if src in ("hi", "ur") and _looks_latin(sample):
+        src = "en"
+    elif (
+        src not in ("auto", None, "en")
+        and _looks_latin(sample)
+        and (transcript.language or "").startswith("en")
+    ):
+        src = "en"
+
     segs = merge_nearby_segments(transcript.segments)
     if not segs:
         return []
 
     out: list[Segment] = []
-    batch_size = 6 if fast else 3
+    batch_size = 4 if fast else 2
+    misses = 0
     for i in range(0, len(segs), batch_size):
         batch = segs[i : i + batch_size]
-        khmer_parts = _translate_batch([s.text for s in batch], src)
+        try:
+            khmer_parts = _translate_batch([s.text for s in batch], src)
+        except Exception:
+            khmer_parts = [""] * len(batch)
+
         for seg, kh in zip(batch, khmer_parts):
-            text = clean_khmer_text(kh) or clean_khmer_text(translate_text(seg.text, source=src))
+            text = clean_khmer_text(kh) or clean_khmer_text(
+                translate_text(seg.text, source=src)
+            )
             if text:
                 out.append(Segment(start=seg.start, end=seg.end, text=text))
-        time.sleep(0.05)
+            else:
+                misses += 1
+        time.sleep(0.12)
+
+    if not out:
+        raise RuntimeError(
+            "Translation to Khmer failed (Google Translate returned no results).\n"
+            "Tips:\n"
+            "• Check internet connection\n"
+            "• Set Source language to Auto detect or English "
+            "(this video may be English narration)\n"
+            "• Wait a minute and retry (rate limit)\n"
+            f"Detail: {misses} lines could not be translated."
+        )
     return out
 
 
@@ -176,7 +273,9 @@ def split_into_two_line_cues(
             continue
         pieces = _chunk_caption_text(text, max_chars=max_chars)
         if len(pieces) == 1:
-            out.append(Segment(start=seg.start, end=seg.end, text=clean_khmer_text(pieces[0])))
+            out.append(
+                Segment(start=seg.start, end=seg.end, text=clean_khmer_text(pieces[0]))
+            )
             continue
 
         span = max(seg.end - seg.start, 0.45 * len(pieces))
