@@ -6,7 +6,12 @@ from dataclasses import dataclass
 from pathlib import Path
 
 from .extract import extract_audio, normalize_to_mp4
-from .music import generate_bgm, mix_into_video, mix_voice_and_music
+from .music import (
+    extract_original_music_bed,
+    generate_bgm,
+    mix_into_video,
+    mix_voice_and_music,
+)
 from .story import generate_khmer_story, story_to_timed_segments, write_story_file
 from .subtitle import write_srt
 from .transcribe import Segment, Transcript, transcribe
@@ -47,6 +52,7 @@ def convert_video_to_khmer(
     voice_label: str = "Female (Sreymom)",
     generate_story: bool = False,
     add_music: bool = False,
+    keep_original_music: bool = True,
     show_note: bool = True,
     video_note: str = "Cinema Summary",
     fast: bool = True,
@@ -61,7 +67,8 @@ def convert_video_to_khmer(
 
     Options:
       - generate_story: rewrite as a Khmer narrative story for voice/subs
-      - add_music: mix soft procedural background music under the audio
+      - keep_original_music: keep uploaded video music under Khmer dub (default)
+      - add_music: mix soft procedural background music (if not keeping original)
       - show_note / video_note: top-right badge on the output video
       - fast: faster remux/encode; voice still uses timed TTS for quality
     """
@@ -157,8 +164,21 @@ def convert_video_to_khmer(
     music_path: Path | None = None
     output_video: Path | None = None
     duration = get_duration_seconds(video_path)
+    dub_mode = mode in ("dub", "dub_subs")
 
-    if add_music:
+    # Dub modes strip original audio — keep the video's music under Khmer by default
+    if keep_original_music and dub_mode:
+        tick("Keeping original music from upload…", 0.66)
+
+        def _music_progress(msg: str) -> None:
+            tick(msg, 0.68)
+
+        music_path = extract_original_music_bed(
+            wav,
+            work / "music_keep",
+            progress_cb=_music_progress,
+        )
+    elif add_music:
         tick("Generating background music…", 0.68)
         music_path = generate_bgm(max(duration, 5.0), work / f"{stem}_bgm.wav")
 
@@ -167,7 +187,8 @@ def convert_video_to_khmer(
     elif mode == "soft_subs":
         tick("Muxing soft Khmer subtitles…", 0.8)
         output_video = soft_sub_video(video_path, khmer_srt, work / f"{stem}_khmer.mp4")
-        if add_music and music_path and output_video:
+        # Soft subs already keep original audio (speech + music)
+        if add_music and not keep_original_music and music_path and output_video:
             tick("Mixing background music…", 0.92)
             mixed = work / f"{stem}_khmer_music.mp4"
             output_video = mix_into_video(output_video, music_path, mixed)
@@ -179,11 +200,12 @@ def convert_video_to_khmer(
             work / f"{stem}_khmer_subs.mp4",
             fast=fast,
         )
-        if add_music and music_path and output_video:
+        # Burned subs already keep original audio (speech + music)
+        if add_music and not keep_original_music and music_path and output_video:
             tick("Mixing background music…", 0.92)
             mixed = work / f"{stem}_khmer_subs_music.mp4"
             output_video = mix_into_video(output_video, music_path, mixed)
-    elif mode in ("dub", "dub_subs"):
+    elif dub_mode:
         tick("Generating timed Khmer voice…", 0.72)
         voice = resolve_voice(voice_label)
         narration, spoken_segments = synthesize_segments(
@@ -197,12 +219,19 @@ def convert_video_to_khmer(
         overlay_srt_segments = split_into_two_line_cues(spoken_segments, max_chars=80)
         khmer_srt = write_srt(overlay_srt_segments, work / f"{stem}_khmer.srt")
 
-        if add_music and music_path:
-            tick("Mixing Khmer voice + music…", 0.82)
+        if music_path:
+            tick(
+                "Mixing Khmer voice + original music…"
+                if keep_original_music
+                else "Mixing Khmer voice + music…",
+                0.82,
+            )
             narration = mix_voice_and_music(
                 narration,
                 music_path,
                 work / "khmer_voice_music.m4a",
+                # Original soundtrack a bit louder than soft procedural BGM
+                music_volume=0.48 if keep_original_music else 0.22,
             )
 
         if mode == "dub_subs":

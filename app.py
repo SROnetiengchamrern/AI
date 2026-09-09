@@ -229,6 +229,7 @@ def process(
     voice_label,
     generate_story,
     add_music,
+    keep_original_music,
     show_note,
     video_note,
     fast_mode,
@@ -275,6 +276,7 @@ def process(
                 voice_label=voice_label,
                 generate_story=bool(generate_story),
                 add_music=bool(add_music),
+                keep_original_music=bool(keep_original_music),
                 show_note=bool(show_note),
                 video_note=(video_note or "").strip() or "Cinema Summary",
                 fast=bool(fast_mode),
@@ -344,8 +346,10 @@ def process(
                 extras.append("fastest ON")
             if generate_story:
                 extras.append("story ON")
-            if add_music:
-                extras.append("music ON")
+            if keep_original_music:
+                extras.append("keep original music ON")
+            elif add_music:
+                extras.append("procedural BGM ON")
             extra_line = f"\n\n**Options:** {', '.join(extras)}" if extras else ""
             body_label = "Khmer story" if generate_story else "Khmer translation"
             # Cap preview text — 1h+ transcripts can break Gradio File outputs
@@ -383,6 +387,7 @@ VIDEO_STYLES = {
 }
 
 TEXT_VIDEO_MODES = {
+    "Title story (from title only)": "title",
     "Auto (detect prompt vs script)": "auto",
     "Visual prompt (match my description)": "visual",
     "Narration script (story text)": "script",
@@ -398,11 +403,14 @@ def _btn_ready_text():
 
 
 def process_text_video(
+    video_title,
     script_text,
     source_language,
     voice_label,
     style_label,
     mode_label,
+    duration_hours,
+    duration_minutes,
     add_music,
     show_captions_kh,
     show_captions_en,
@@ -412,9 +420,11 @@ def process_text_video(
     show_title_kh,
     fast_mode,
 ):
-    """Text → AI voice + AI scene video (visual prompt or script)."""
-    if not (script_text or "").strip():
-        raise gr.Error("Please write your prompt or script first.")
+    """Text → AI voice + AI scene video (title / visual / script)."""
+    title = (video_title or "").strip()
+    script = (script_text or "").strip()
+    if not title and not script:
+        raise gr.Error("Please write a video title (example: A Poor Cat Becomes a Millionaire).")
 
     out_root = Path(tempfile.mkdtemp(prefix="tv_", dir=str(preferred_temp_root())))
 
@@ -437,8 +447,11 @@ def process_text_video(
     def worker() -> None:
         try:
             holder["result"] = create_video_from_text(
-                script_text,
+                script,
                 output_dir=out_root,
+                video_title=title,
+                duration_hours=int(duration_hours or 0),
+                duration_minutes=int(duration_minutes or 0),
                 source_language=SOURCE_LANGUAGES_REVERSE.get(source_language, "auto"),
                 voice_label=voice_label,
                 style=VIDEO_STYLES.get(style_label, "cinematic"),
@@ -489,9 +502,21 @@ def process_text_video(
             scene_preview = "\n".join(f"{i + 1}. {s}" for i, s in enumerate(result.scenes[:12]))
             if len(result.scenes) > 12:
                 scene_preview += f"\n… (+{len(result.scenes) - 12} more)"
-            mode_note = "visual prompt → matched AI scenes" if result.mode == "visual" else "narration script"
+            mode_labels = {
+                "visual": "visual prompt → matched AI scenes",
+                "title": "title story → AI auto scenes",
+                "script": "narration script",
+            }
+            mode_note = mode_labels.get(result.mode, result.mode)
+            hours = int(duration_hours or 0)
+            minutes = int(duration_minutes or 0)
+            if hours <= 0 and minutes <= 0:
+                minutes = 1
+            dur_note = f"{hours}h {minutes}m" if hours else f"{minutes} min"
             summary = (
                 f"**Status:** AI video ready ({mode_note})\n\n"
+                f"**Title:** {title or '(from script)'}\n\n"
+                f"**Target length:** {dur_note}\n\n"
                 f"**Scenes:** {len(result.scenes)}\n\n"
                 f"**Khmer voice script**\n\n{result.khmer_text}\n\n"
                 f"**Scene list**\n\n{scene_preview}\n\n"
@@ -674,7 +699,9 @@ def _preview_text(text: str, limit: int = 3500) -> str:
     return text[:limit].rstrip() + "\n\n_…truncated — full text is in the .srt download._"
 
 
-def update_estimate(video, mode_label, model_label, generate_story, add_music, fast_mode):
+def update_estimate(
+    video, mode_label, model_label, generate_story, add_music, keep_original_music, fast_mode
+):
     try:
         msg = estimate_message(
             video,
@@ -685,6 +712,7 @@ def update_estimate(video, mode_label, model_label, generate_story, add_music, f
             MODES,
             MODELS,
             fast=bool(fast_mode),
+            keep_original_music=bool(keep_original_music),
         )
         # Friendly note when the sample is very long
         try:
@@ -946,7 +974,8 @@ def build_ui() -> gr.Blocks:
                 gr.Markdown(
                     """
                     Upload a video in **English, Chinese, Thai,** or other languages.
-                    Transcribe → translate to **Khmer (ខ្មែរ)** → subtitles / dub / story / BGM.
+                    Transcribe → translate to **Khmer (ខ្មែរ)** → subtitles / dub / story.
+                    **Keep original music** is ON by default for Khmer voice modes.
                     """
                 )
 
@@ -989,10 +1018,15 @@ def build_ui() -> gr.Blocks:
                             value=False,
                             info="Turns the video transcript into a short Khmer story before speaking.",
                         )
+                        keep_original_music = gr.Checkbox(
+                            label="Keep original music — ON = music from upload stays under Khmer voice",
+                            value=True,
+                            info="For SPEAKS Khmer modes: keeps the uploaded video soundtrack. Soft/burned subs already keep full original audio.",
+                        )
                         add_music = gr.Checkbox(
-                            label="Add background music (soft BGM under the voice)",
+                            label="Add soft procedural BGM (only if Keep original music is OFF)",
                             value=False,
-                            info="Procedural calm music mixed quietly under Khmer speech / video audio.",
+                            info="Synthetic calm music — ignored when Keep original music is ON.",
                         )
                         show_note = gr.Checkbox(
                             label="Show video note (top right)",
@@ -1012,6 +1046,7 @@ def build_ui() -> gr.Blocks:
                                 "Base (recommended quality)",
                                 False,
                                 False,
+                                True,
                                 True,
                             ),
                             elem_id="estimate_time",
@@ -1038,10 +1073,18 @@ def build_ui() -> gr.Blocks:
                         khmer_srt = gr.File(label="Download Khmer subtitles (.srt)")
                         original_srt = gr.File(label="Download original-language subtitles (.srt)")
                         story_file = gr.File(label="Download Khmer story (.txt)")
-                        music_file = gr.File(label="Download background music (.wav)")
+                        music_file = gr.File(label="Download music bed (.wav)")
                         video_download = gr.File(label="Download output video (.mp4)")
 
-                estimate_inputs = [video_in, mode, model, generate_story, add_music, fast_mode]
+                estimate_inputs = [
+                    video_in,
+                    mode,
+                    model,
+                    generate_story,
+                    add_music,
+                    keep_original_music,
+                    fast_mode,
+                ]
                 for comp in estimate_inputs:
                     comp.change(
                         fn=update_estimate,
@@ -1059,6 +1102,7 @@ def build_ui() -> gr.Blocks:
                         voice,
                         generate_story,
                         add_music,
+                        keep_original_music,
                         show_note,
                         video_note,
                         fast_mode,
@@ -1081,6 +1125,7 @@ def build_ui() -> gr.Blocks:
                 gr.Markdown(
                     """
                     ### Tips (Video → Khmer)
+                    - **Keep original music** (default ON): Khmer voice + soundtrack from your upload.
                     - Whisper **Base** = better text. Keep a stable internet for Edge TTS.
                     - **Video note** (default: *Cinema Summary*) shows in the **top right** of the output video.
                     - Long Chinese filenames are auto-staged to a short path.
@@ -1091,29 +1136,45 @@ def build_ui() -> gr.Blocks:
             with gr.Tab("Text → AI Video"):
                 gr.Markdown(
                     """
-                    Paste a **visual prompt** (cinematic description) or a **story script**.  
-                    - Visual prompt → AI images follow your description beat-by-beat  
-                    - Script → Khmer narration + scene cards  
+                    Write a **short title** — AI auto-builds the story video (script detail optional).  
+                    Example title: **A Poor Cat Becomes a Millionaire**  
+                    Set **Hours / Minutes** for target video length.
                     """
                 )
                 with gr.Row():
                     with gr.Column(scale=1):
+                        title_in = gr.Textbox(
+                            label="Video title (main)",
+                            lines=2,
+                            value="A Poor Cat Becomes a Millionaire",
+                            placeholder="A Poor Cat Becomes a Millionaire",
+                        )
                         script_in = gr.Textbox(
-                            label="Write visual prompt or script",
-                            lines=12,
+                            label="Optional script / visual prompt (not required for title mode)",
+                            lines=6,
                             placeholder=(
-                                "Visual prompt example:\n"
-                                "A realistic green frog hiding on a lily pad in a natural pond, "
-                                "watching a small fish swim nearby. The frog suddenly jumps with "
-                                "incredible speed, catches the fish in its mouth, then calmly "
-                                "swallows it while sitting on the lily pad. Cinematic wildlife "
-                                "documentary style, ultra-realistic, detailed water splashes, "
-                                "natural lighting, 4K, smooth camera movement."
+                                "Leave empty for title-only AI story.\n"
+                                "Or paste a visual prompt / narration if you want more control."
                             ),
                         )
+                        with gr.Row():
+                            tv_hours = gr.Number(
+                                label="Length — Hours",
+                                value=0,
+                                minimum=0,
+                                maximum=2,
+                                precision=0,
+                            )
+                            tv_minutes = gr.Number(
+                                label="Length — Minutes",
+                                value=1,
+                                minimum=0,
+                                maximum=59,
+                                precision=0,
+                            )
                         tv_mode = gr.Dropdown(
                             choices=list(TEXT_VIDEO_MODES.keys()),
-                            value="Auto (detect prompt vs script)",
+                            value="Title story (from title only)",
                             label="Input type",
                         )
                         tv_source = gr.Dropdown(
@@ -1154,7 +1215,7 @@ def build_ui() -> gr.Blocks:
                         )
                         tv_title_en = gr.Checkbox(
                             label="Show English title (top right)",
-                            value=False,
+                            value=True,
                         )
                         tv_title_kh = gr.Checkbox(
                             label="Show Khmer title (top right)",
@@ -1186,11 +1247,14 @@ def build_ui() -> gr.Blocks:
                 tv_btn.click(
                     fn=process_text_video,
                     inputs=[
+                        title_in,
                         script_in,
                         tv_source,
                         tv_voice,
                         tv_style,
                         tv_mode,
+                        tv_hours,
+                        tv_minutes,
                         tv_music,
                         tv_captions,
                         tv_captions_en,
@@ -1214,14 +1278,24 @@ def build_ui() -> gr.Blocks:
 
                 gr.Markdown(
                     """
-                    ### Tips (Text → AI Video)
-                    - **People / animals / ghosts** in the text are forced into every AI scene.
-                    - Each subject type gets its own **animation**: people (push-in), animals (track pan), ghosts (float/drift).
-                    - **Video note** (default: *Cinema Summary*) shows in the **top right** on every scene.
-                    - Tick **English title** or **Khmer title** to show story titles in the top right.
-                    - Tick **Khmer captions** and/or **English captions** for on-screen subtitles (turn both OFF for pure animal/visual prompts).
-                    - Use **Visual prompt** mode for best match; captions sync with voice when enabled.
-                    - Keep prompts clear: subject + action + style.
+                    ### Standard generate (title → AI video)
+                    1. Title: **A Poor Cat Becomes a Millionaire** (or your own)
+                    2. Input type: **Title story (from title only)**
+                    3. Length: **0 hours + 1–3 minutes** (start short; max 2 hours)
+                    4. Show English title: **ON**
+                    5. Captions: **OFF** (optional later)
+                    6. Faster encode: **ON** → Generate AI video
+
+                    Script detail is **not required** — AI expands the title into scenes + Khmer voice.
+
+                    | Length tip | Scenes (approx.) |
+                    |------------|------------------|
+                    | 1 minute | ~6 scenes |
+                    | 5 minutes | ~30 scenes |
+                    | 1 hour | ~40 longer-held scenes |
+
+                    ### Tips
+                    - Optional script/prompt only if you want extra control.
                     - Needs internet for AI images + Edge TTS.
                     """
                 )

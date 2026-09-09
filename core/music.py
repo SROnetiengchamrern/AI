@@ -197,3 +197,61 @@ def mix_into_video(
         ]
     )
     return out_path
+
+
+def extract_original_music_bed(
+    mix_audio: str | Path,
+    work_dir: str | Path,
+    *,
+    progress_cb=None,
+) -> Path:
+    """
+    Keep the uploaded video's music for Khmer dub.
+
+    Prefer Demucs instrumental (original voice removed). If Demucs is missing
+    or fails, fall back to a ducked copy of the full original mix so music
+    still stays under the Khmer voice.
+    """
+    mix_audio = Path(mix_audio)
+    work_dir = Path(work_dir)
+    work_dir.mkdir(parents=True, exist_ok=True)
+    out_path = work_dir / "original_music_bed.wav"
+
+    def tick(msg: str) -> None:
+        if progress_cb:
+            progress_cb(msg)
+
+    try:
+        from .song_ai import scrub_instrumental, separate_vocals_and_music
+
+        tick("Separating original music (keep instrumental)…")
+        _vocals, music_raw = separate_vocals_and_music(mix_audio, work_dir / "stems")
+        tick("Cleaning music bed…")
+        return scrub_instrumental(music_raw, out_path)
+    except Exception:
+        # Demucs optional — still keep music by ducking the original mix
+        tick("Demucs unavailable — keeping original audio quietly under Khmer…")
+        run_ffmpeg(
+            [
+                "-i",
+                str(mix_audio),
+                "-af",
+                (
+                    "highpass=f=40,"
+                    "equalizer=f=1800:t=q:w=1.2:g=-6,"
+                    "equalizer=f=3200:t=q:w=1.0:g=-5,"
+                    "volume=0.55,"
+                    "loudnorm=I=-19:TP=-2.0:LRA=11"
+                ),
+                "-ar",
+                "48000",
+                str(out_path),
+            ]
+        )
+        if not out_path.exists() or out_path.stat().st_size == 0:
+            raise RuntimeError(
+                "Could not keep original music from this video. "
+                "Install Demucs for cleaner separation:\n"
+                "  pip install -U demucs torch torchaudio"
+            )
+        return out_path

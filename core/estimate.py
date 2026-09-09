@@ -52,6 +52,7 @@ def estimate_seconds(
     model_size: str = "tiny",
     generate_story: bool = False,
     add_music: bool = False,
+    keep_original_music: bool = True,
     fast: bool = True,
 ) -> float:
     """
@@ -75,7 +76,13 @@ def estimate_seconds(
     mode_work = d * mode_f
 
     story = 15.0 if generate_story else 0.0
-    music = 5.0 + d * 0.03 if add_music else 0.0
+    # Demucs-style keep-music is slower; procedural BGM is cheap
+    if keep_original_music and mode in ("dub", "dub_subs"):
+        music = 20.0 + d * 0.35
+    elif add_music:
+        music = 5.0 + d * 0.03
+    else:
+        music = 0.0
 
     cushion = 1.1
     total = (fixed + normalize + whisper + translate + mode_work + story + music) * cushion
@@ -91,6 +98,7 @@ def estimate_message(
     modes_map: dict,
     models_map: dict,
     fast: bool = True,
+    keep_original_music: bool = True,
 ) -> str:
     if not video_path:
         return (
@@ -134,11 +142,17 @@ def estimate_message(
         model_size=model,
         generate_story=bool(generate_story),
         add_music=bool(add_music),
+        keep_original_music=bool(keep_original_music),
         fast=bool(fast),
     )
     low = est * 0.75
     high = est * 1.35
     speed_note = "fastest ON" if fast else "quality ON"
+    music_note = ""
+    if keep_original_music and mode in ("dub", "dub_subs"):
+        music_note = ", keep music"
+    elif add_music:
+        music_note = ", music"
 
     return (
         f"**Video length:** `{format_video_length(duration)}`\n\n"
@@ -146,5 +160,5 @@ def estimate_message(
         f"_About **{format_duration(est)}** on a typical CPU "
         f"(Whisper **{model}**, mode **{mode}**, {speed_note}"
         f"{', story' if generate_story else ''}"
-        f"{', music' if add_music else ''})._"
+        f"{music_note})._"
     )

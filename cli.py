@@ -56,7 +56,13 @@ def main() -> None:
     parser.add_argument(
         "--music",
         action="store_true",
-        help="Add soft background music under the voice / audio",
+        help="Add soft procedural background music under the voice / audio",
+    )
+    parser.add_argument(
+        "--keep-music",
+        action=argparse.BooleanOptionalAction,
+        default=True,
+        help="Keep original music from the upload under Khmer dub (default: on)",
     )
     parser.add_argument(
         "--fast",
@@ -86,6 +92,7 @@ def main() -> None:
         voice_label=voice_label,
         generate_story=args.story,
         add_music=args.music,
+        keep_original_music=args.keep_music,
         fast=args.fast,
         progress_cb=progress,
     )

@@ -1,8 +1,9 @@
 """Text → AI video + AI voice.
 
-Supports two input styles:
-  1) Visual prompt (cinematic / wildlife description) → images match the prompt
-  2) Narration script (story text) → Khmer VO + scene cards
+Supports three input styles:
+  1) Title story (short title → AI expands scenes to target length)
+  2) Visual prompt (cinematic / wildlife description) → images match the prompt
+  3) Narration script (story text) → Khmer VO + scene cards
 """
 
 from __future__ import annotations
@@ -870,6 +871,158 @@ def _video_title_kh(text: str, khmer_fallback: str = "") -> str:
     return _fit_caption(line, max_chars=42)
 
 
+def parse_target_duration(hours: float | int | None, minutes: float | int | None) -> float:
+    """
+    Hours + minutes → total seconds.
+    Default 60s when both empty/zero. Cap at 2 hours (practical AI scene limit).
+    """
+    try:
+        h = max(0, int(hours or 0))
+    except (TypeError, ValueError):
+        h = 0
+    try:
+        m = max(0, int(minutes or 0))
+    except (TypeError, ValueError):
+        m = 0
+    total = h * 3600 + m * 60
+    if total <= 0:
+        total = 60
+    return float(min(total, 2 * 3600))
+
+
+def _title_subject(title: str) -> str:
+    """Main character / subject from a short title."""
+    t = (title or "").strip()
+    animals = extract_subjects(t)
+    people = extract_people(t)
+    if animals:
+        return animals[0]
+    if people:
+        return _people_display_name(people[0])
+    # First meaningful word(s) from title
+    cleaned = re.sub(r"[^\w\s'-]", " ", t, flags=re.UNICODE)
+    words = [w for w in cleaned.split() if len(w) > 2 and w.lower() not in {
+        "the", "and", "becomes", "become", "a", "an", "to", "of", "in", "on",
+        "with", "from", "into", "how", "why", "what", "when", "who", "poor",
+        "rich", "new", "old", "very", "true", "story",
+    }]
+    if words:
+        return " ".join(words[:3])
+    return t[:40] or "hero"
+
+
+def _title_story_beats(title: str, *, n_beats: int) -> list[str]:
+    """
+    Expand a short title into narration beats (no LLM).
+    Example title: "A Poor Cat Becomes a Millionaire"
+    """
+    title = re.sub(r"\s+", " ", (title or "").strip())
+    subject = _title_subject(title)
+    arc = [
+        f"This story is called {title}.",
+        f"Meet {subject}, living a hard and humble life.",
+        f"{subject} dreams of a better future every day.",
+        f"One day, a surprising chance appears for {subject}.",
+        f"{subject} faces fear, hunger, and doubt — but keeps going.",
+        f"A small kindness and bold courage open a new door.",
+        f"Step by step, luck begins to turn for {subject}.",
+        f"Hard work finally brings money, respect, and hope.",
+        f"Against all odds, {subject} becomes a true millionaire.",
+        f"Now {subject} enjoys a new life of comfort and freedom.",
+        f"Friends gather as {subject} celebrates this miracle.",
+        f"And so ends the story: {title}.",
+    ]
+    n = max(4, min(int(n_beats), 48))
+    if n <= len(arc):
+        # Evenly sample arc points
+        idxs = [round(i * (len(arc) - 1) / (n - 1)) for i in range(n)]
+        return [arc[i] for i in idxs]
+    # Stretch: repeat arc with scene variations
+    extras = [
+        f"{subject} walks through crowded streets searching for opportunity.",
+        f"Night falls, and {subject} still refuses to give up.",
+        f"A stranger notices {subject} and offers unexpected help.",
+        f"{subject} learns a clever skill that changes everything.",
+        f"Danger comes close, but {subject} escapes with courage.",
+        f"The first coins appear — proof that destiny can change.",
+        f"{subject} invests wisely and grows wealth little by little.",
+        f"Rivals laugh, until {subject} proves them wrong.",
+        f"A golden moment arrives; {subject} seizes it.",
+        f"Luxury replaces struggle as {subject} rises.",
+    ]
+    out = list(arc)
+    i = 0
+    while len(out) < n:
+        out.insert(len(out) - 1, extras[i % len(extras)])
+        i += 1
+    return out[:n]
+
+
+def expand_title_to_scenes(
+    title: str,
+    *,
+    style: str = "cinematic",
+    target_seconds: float = 60.0,
+) -> tuple[str, list[SceneSpec]]:
+    """
+    Title-only → auto story scenes + Khmer voice lines.
+    Script detail is optional; AI fills the journey from the title.
+    """
+    title = re.sub(r"\s+", " ", (title or "").strip())
+    if not title:
+        raise ValueError("Please write a video title first.")
+
+    # ~1 beat per 10s, min 4, max 40 (long videos hold each scene longer)
+    n_beats = max(4, min(40, int(round(max(30.0, target_seconds) / 10.0))))
+    beats_en = _title_story_beats(title, n_beats=n_beats)
+    subject = _title_subject(title)
+    subjects = extract_subjects(title)
+    people = extract_people(title)
+    ghosts = extract_ghosts(title)
+
+    if ghosts:
+        subject_prefix = (
+            f"cinematic horror shot of {_ghost_display_name(ghosts[0])} clearly visible, "
+        )
+    elif people:
+        subject_prefix = (
+            f"photorealistic medium shot of {_people_display_name(people[0])}, "
+            f"face clearly visible, "
+        )
+    elif subjects:
+        subject_prefix = f"Photorealistic {', '.join(subjects)} as main subjects, "
+    else:
+        subject_prefix = f"cinematic story scene featuring {subject}, "
+
+    scenes: list[SceneSpec] = []
+    narrate_kh: list[str] = []
+    for beat in beats_en:
+        try:
+            kh = clean_khmer_text(translate_text(beat, source="en"))
+        except Exception:
+            kh = ""
+        speak = prepare_speak_text(kh) if kh else ""
+        img = (
+            f"{subject_prefix}illustrating: {beat[:120]}, "
+            f"story title '{title}', {_style_suffix(style)}, "
+            f"emotional atmosphere, sharp focus, no text, no watermark, no letters"
+        )
+        img = reinforce_animals_in_prompt(img, title, beat)
+        scenes.append(
+            SceneSpec(
+                image_prompt=img,
+                speak_text=speak or "។",
+                caption=speak,
+                caption_en=beat,
+            )
+        )
+        if speak:
+            narrate_kh.append(speak)
+
+    khmer = " ".join(narrate_kh) if narrate_kh else title
+    return khmer, scenes
+
+
 def _english_from_khmer(text: str) -> str:
     """Khmer script → short English title for on-screen badge."""
     try:
@@ -1228,14 +1381,34 @@ def build_scene_specs(
     mode: str = "auto",
     source_language: str = "auto",
     style: str = "cinematic",
+    video_title: str = "",
+    target_seconds: float = 60.0,
 ) -> tuple[str, list[SceneSpec], str]:
     """
     Build scene list from user text.
     Returns (khmer_summary, scenes, resolved_mode).
     """
+    title = re.sub(r"\s+", " ", (video_title or "").strip())
     text = (text or "").strip()
+
+    # Title-only / title mode: AI expands story from short title
+    use_title = mode == "title" or (
+        mode == "auto" and title and (not text or len(text) < 80)
+    )
+    if use_title and title:
+        khmer, scenes = expand_title_to_scenes(
+            title, style=style, target_seconds=target_seconds
+        )
+        return khmer, scenes, "title"
+
+    if not text and title:
+        khmer, scenes = expand_title_to_scenes(
+            title, style=style, target_seconds=target_seconds
+        )
+        return khmer, scenes, "title"
+
     if not text:
-        raise ValueError("Please write some text first.")
+        raise ValueError("Please write a title, prompt, or script first.")
 
     resolved = mode
     if mode == "auto":
@@ -1630,7 +1803,10 @@ def _make_scene_clip(
     """
     has_audio = bool(audio_path and Path(audio_path).exists())
     if has_audio:
-        dur = max(1.2, get_duration_seconds(audio_path))
+        audio_dur = max(1.2, get_duration_seconds(audio_path))
+        # Optional target hold (title/duration mode) — pad voice if scene must run longer
+        hold = float(duration) if duration and float(duration) > 0 else 0.0
+        dur = max(audio_dur, hold) if hold else audio_dur
     else:
         dur = max(2.8, float(duration or 3.2))
 
@@ -1844,6 +2020,9 @@ def create_video_from_text(
     text: str,
     output_dir: str | Path | None = None,
     *,
+    video_title: str = "",
+    duration_hours: int = 0,
+    duration_minutes: int = 1,
     source_language: str = "auto",
     voice_label: str = "Female (Sreymom)",
     style: str = "cinematic",
@@ -1861,17 +2040,24 @@ def create_video_from_text(
     progress_cb=None,
 ) -> TextVideoResult:
     """
-    text → AI images (matched to prompt) + AI voice → MP4.
+    text/title → AI images + AI voice → MP4.
 
-    mode: auto | visual | script
+    mode: auto | title | visual | script
+    duration_hours + duration_minutes set target length (especially title mode).
     """
 
     def tick(msg: str, frac: float) -> None:
         if progress_cb:
             progress_cb(frac, msg)
 
-    tick("Understanding your text…", 0.04)
-    visual_like = mode == "visual" or (mode == "auto" and is_visual_prompt(text))
+    title = re.sub(r"\s+", " ", (video_title or "").strip())
+    text = (text or "").strip()
+    target_sec = parse_target_duration(duration_hours, duration_minutes)
+
+    tick("Understanding your title / text…", 0.04)
+    visual_like = mode == "visual" or (
+        mode == "auto" and text and is_visual_prompt(text) and not title
+    )
     use_style = "match" if visual_like else style
     # Captions: Khmer and/or English (independent toggles)
     effective_captions_kh = bool(show_captions_kh)
@@ -1883,23 +2069,44 @@ def create_video_from_text(
         mode=mode,
         source_language=source_language,
         style=use_style if use_style != "match" else style,
+        video_title=title,
+        target_seconds=target_sec,
     )
     if not specs:
         raise ValueError("No usable scenes from this text.")
 
+    # Explicit title wins; otherwise derive from text when toggles on
     title_en = ""
     title_kh = ""
     if show_title_en:
-        if _looks_khmer(text):
+        if title and not _looks_khmer(title):
+            title_en = title if len(title) <= 58 else title[:58].rsplit(" ", 1)[0] + "..."
+        elif title and _looks_khmer(title):
+            title_en = _english_from_khmer(title)
+        elif _looks_khmer(text):
             title_en = _english_from_khmer(text)
         else:
             title_en = _video_title_en(text)
     if show_title_kh:
-        title_kh = _video_title_kh(text, khmer_fallback=khmer)
+        if title and _looks_khmer(title):
+            title_kh = _fit_caption(clean_khmer_text(title), max_chars=42)
+        elif title:
+            try:
+                title_kh = _fit_caption(
+                    clean_khmer_text(translate_text(title, source="en")), max_chars=42
+                )
+            except Exception:
+                title_kh = _video_title_kh(text, khmer_fallback=khmer)
+        else:
+            title_kh = _video_title_kh(text, khmer_fallback=khmer)
 
+    # Even scene holds so joined video ≈ target length (title mode)
+    scene_hold = max(3.0, target_sec / max(1, len(specs))) if resolved == "title" else None
+
+    seed_src = title or text
     root = Path(output_dir) if output_dir else preferred_temp_root() / "text_video"
     root.mkdir(parents=True, exist_ok=True)
-    work = root / f"tv_{hashlib.md5(text.encode('utf-8')).hexdigest()[:10]}"
+    work = root / f"tv_{hashlib.md5(seed_src.encode('utf-8')).hexdigest()[:10]}"
     work.mkdir(parents=True, exist_ok=True)
     scenes_dir = work / "scenes"
     scenes_dir.mkdir(exist_ok=True)
@@ -1914,7 +2121,7 @@ def create_video_from_text(
     audio_parts: list[Path] = []
     n = len(specs)
     # Same seed family → more consistent animals across scenes
-    base_seed = int(hashlib.md5(text.encode("utf-8")).hexdigest()[:8], 16) % 90000
+    base_seed = int(hashlib.md5(seed_src.encode("utf-8")).hexdigest()[:8], 16) % 90000
 
     for i, spec in enumerate(specs):
         base = 0.08 + 0.75 * (i / max(1, n))
@@ -1943,14 +2150,14 @@ def create_video_from_text(
         clip = scenes_dir / f"clip_{i:03d}.mp4"
         cap_kh = spec.caption if effective_captions_kh else ""
         cap_en = spec.caption_en if effective_captions_en else ""
-        motion_kind = detect_motion_kind(f"{text} {spec.image_prompt} {spec.speak_text}")
+        motion_kind = detect_motion_kind(f"{seed_src} {spec.image_prompt} {spec.speak_text}")
         _make_scene_clip(
             jpg,
             mp3,
             cap_kh,
             clip,
             caption_en=cap_en,
-            duration=3.2 if not mp3 else None,
+            duration=scene_hold if scene_hold else (3.2 if not mp3 else None),
             width=width,
             height=height,
             fast=fast,
@@ -2005,8 +2212,8 @@ def create_video_from_text(
             ]
         )
 
-    download_label = effective_note or title_en or title_kh or "ai-video"
-    download_stem = download_video_stem(text, label=download_label)
+    download_label = title or effective_note or title_en or title_kh or "ai-video"
+    download_stem = download_video_stem(seed_src, label=download_label)
     final = work / f"{download_stem}.mp4"
     if add_music and audio_parts:
         tick("Mixing background music…", 0.95)
