@@ -55,6 +55,7 @@ def convert_video_to_khmer(
     keep_original_music: bool = True,
     show_note: bool = True,
     video_note: str = "Cinema Summary",
+    logo_path: str | Path | None = None,
     fast: bool = True,
     progress_cb=None,
 ) -> PipelineResult:
@@ -70,6 +71,7 @@ def convert_video_to_khmer(
       - keep_original_music: keep uploaded video music under Khmer dub (default)
       - add_music: mix soft procedural background music (if not keeping original)
       - show_note / video_note: top-right badge on the output video
+      - logo_path: optional user logo burned top-left on the output video
       - fast: faster remux/encode; voice still uses timed TTS for quality
     """
     source_path = Path(video_path)
@@ -256,13 +258,22 @@ def convert_video_to_khmer(
         raise ValueError(f"Unknown mode: {mode}")
 
     note = (video_note or "").strip() if show_note else ""
-    if output_video and note:
-        tick("Adding video note…", 0.96)
+    logo = Path(logo_path) if logo_path else None
+    if logo is not None and not logo.is_file():
+        logo = None
+    if output_video and (note or logo):
+        tick(
+            "Adding logo + video note…"
+            if note and logo
+            else ("Adding logo…" if logo else "Adding video note…"),
+            0.96,
+        )
         noted = work / f"{output_video.stem}_noted.mp4"
         output_video = overlay_video_note(
             output_video,
             note,
             noted,
+            logo_path=logo,
             fast=fast,
         )
 

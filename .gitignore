@@ -9,3 +9,4 @@ _sample_*.mp4
 *.wav
 .DS_Store
 firebase_config.json
+.env

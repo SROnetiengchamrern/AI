@@ -17,6 +17,16 @@ import tempfile
 import threading
 from pathlib import Path
 
+_ROOT = Path(__file__).resolve().parent
+
+# Load optional .env (POLLINATIONS_API_KEY, Firebase overrides, …)
+try:
+    from dotenv import load_dotenv
+
+    load_dotenv(_ROOT / ".env")
+except ImportError:
+    pass
+
 from core import KHMER_VOICES, SOURCE_LANGUAGES, ensure_ffmpeg_on_path
 from core.firebase_config import is_firebase_configured, load_firebase_config
 from core.fonts import ensure_battambang_fonts
@@ -33,9 +43,19 @@ from core.estimate import estimate_message
 from core.pipeline import convert_video_to_khmer
 from core.song_ai import SONG_AI_VOICES, create_song_ai_video
 from core.text_video import create_video_from_text
+from core.kids_video import (
+    KIDS_DEFAULT_IMAGE_SOURCE,
+    KIDS_DEFAULT_SPEAK,
+    KIDS_DEFAULT_VOICE,
+    KIDS_IMAGE_SOURCES,
+    KIDS_SPEAK_LANGUAGES,
+    KIDS_THEME_CHOICES,
+    KIDS_VOICES,
+    create_kids_video,
+    draft_kids_content,
+)
 from core import copy_upload_to_short_path, path_exists_safe, preferred_temp_root
 
-_ROOT = Path(__file__).resolve().parent
 _AUTH_DIR = _ROOT / "static" / "auth"
 # Guests always start at login unless FIREBASE_REQUIRE_LOGIN=0
 _REQUIRE_LOGIN = os.environ.get("FIREBASE_REQUIRE_LOGIN", "1").strip().lower() not in {
@@ -61,6 +81,7 @@ MODELS = {
 }
 
 VIDEO_EXTS = {".mp4", ".mov", ".mkv", ".avi", ".webm", ".m4v", ".wmv", ".flv", ".mpeg", ".mpg", ".3gp"}
+IMAGE_EXTS = {".png", ".jpg", ".jpeg", ".webp", ".gif", ".bmp", ".tif", ".tiff"}
 
 SOURCE_LANGUAGES_REVERSE = {v: k for k, v in SOURCE_LANGUAGES.items()}
 
@@ -121,6 +142,35 @@ def resolve_upload(file_obj) -> Path:
         raise RuntimeError(
             f"Unsupported file type '{path.suffix}'. "
             "Please upload MP4, MOV, MKV, AVI, or WebM."
+        )
+    return path
+
+
+def resolve_logo_upload(file_obj) -> Path | None:
+    """Optional logo image for top-left overlay. Returns None if not provided."""
+    if file_obj is None or file_obj == "":
+        return None
+
+    path: Path | None = None
+    if isinstance(file_obj, (str, Path)):
+        path = Path(file_obj)
+    elif isinstance(file_obj, dict):
+        for key in ("path", "name", "image"):
+            if file_obj.get(key):
+                path = Path(file_obj[key])
+                break
+    else:
+        candidate = getattr(file_obj, "name", None) or str(file_obj)
+        path = Path(candidate) if candidate else None
+
+    if path is None or not path_exists_safe(path):
+        raise RuntimeError(
+            "Logo file not found. Re-upload a PNG/JPG/WebP image."
+        )
+    if path.suffix.lower() not in IMAGE_EXTS:
+        raise RuntimeError(
+            f"Unsupported logo type '{path.suffix}'. "
+            "Please upload PNG, JPG, or WebP."
         )
     return path
 
@@ -232,15 +282,32 @@ def process(
     keep_original_music,
     show_note,
     video_note,
+    logo_file,
     fast_mode,
+    rights_ok=False,
 ):
     """
     Generator so the loading spinner + progress bar update live while converting.
     Yields: loading_html, progress_pct, progress_status, run_btn,
             summary, khmer_srt, original_srt, story_file, music_file, video_download
     """
+    if not rights_ok:
+        yield _fail_convert(
+            RuntimeError(
+                "Please confirm you own this video or have a license to edit/publish it "
+                "(checkbox under Upload video). This tool cannot remove copyright."
+            )
+        )
+        return
+
     try:
         video_path = resolve_upload(video)
+    except Exception as exc:
+        yield _fail_convert(exc)
+        return
+
+    try:
+        logo_path = resolve_logo_upload(logo_file)
     except Exception as exc:
         yield _fail_convert(exc)
         return
@@ -255,6 +322,19 @@ def process(
     except Exception as exc:
         yield _fail_convert(exc)
         return
+
+    staged_logo: Path | None = None
+    if logo_path is not None:
+        try:
+            logo_dir = out_root / "logo"
+            logo_dir.mkdir(parents=True, exist_ok=True)
+            staged_logo = logo_dir / f"logo{logo_path.suffix.lower() or '.png'}"
+            import shutil
+
+            shutil.copy2(logo_path, staged_logo)
+        except Exception as exc:
+            yield _fail_convert(RuntimeError(f"Could not stage logo: {exc}"))
+            return
 
     yield _progress_tuple(2, "Starting…")
 
@@ -279,6 +359,7 @@ def process(
                 keep_original_music=bool(keep_original_music),
                 show_note=bool(show_note),
                 video_note=(video_note or "").strip() or "Cinema Summary",
+                logo_path=staged_logo,
                 fast=bool(fast_mode),
                 progress_cb=on_progress,
             )
@@ -529,6 +610,223 @@ def process_text_video(
                 _progress_status(100, "Done — download files below."),
                 _btn_ready_text(),
                 summary,
+                str(result.video_path),
+                str(result.audio_path),
+            )
+            return
+
+
+def _btn_busy_kids():
+    return gr.update(interactive=False, value="Generating kids video… please wait")
+
+
+def _btn_ready_kids():
+    return gr.update(interactive=True, value="Generate kids video")
+
+
+def preview_kids_draft(theme_label, custom_title, custom_script, duration_hours, duration_minutes):
+    """Fill title + English lyrics + speak preview (no render)."""
+    try:
+        draft = draft_kids_content(
+            theme_label or "Humpty Dumpty",
+            custom_title or "",
+            custom_script or "",
+            duration_hours=int(duration_hours or 0),
+            duration_minutes=int(duration_minutes or 3),
+        )
+    except Exception as exc:
+        raise gr.Error(f"Could not draft kids song: {exc}") from exc
+    lyrics_preview = (draft.lyrics_en or "")[:500]
+    if draft.lyrics_en and len(draft.lyrics_en) > 500:
+        lyrics_preview += "…"
+    summary = (
+        f"**Draft ready** — title follows CoComelon-style pattern.\n\n"
+        f"**Title:** {draft.title}\n\n"
+        f"**Speak language:** English by default (change under Speak).\n\n"
+        f"**English lyrics (preview)**\n\n{lyrics_preview}\n\n"
+        f"_Click **Generate kids video** to render with English (or Khmer) speaker._"
+    )
+    return draft.title, draft.lyrics_en, summary
+
+
+def _kids_voices_for_speak(speak_label: str):
+    """When Speak = English → English voices; Khmer → Khmer voices (keep all listed)."""
+    code = KIDS_SPEAK_LANGUAGES.get(speak_label or "", "en")
+    if code == "km":
+        return gr.update(
+            choices=list(KIDS_VOICES.keys()),
+            value="Khmer — Female (Sreymom)",
+        )
+    return gr.update(
+        choices=list(KIDS_VOICES.keys()),
+        value=KIDS_DEFAULT_VOICE,
+    )
+
+
+def process_kids_video(
+    theme_label,
+    custom_title,
+    custom_script,
+    speak_language,
+    voice_label,
+    image_source,
+    image_urls,
+    duration_hours,
+    duration_minutes,
+    add_music,
+    show_captions_kh,
+    show_captions_en,
+    show_note,
+    video_note,
+    show_title_en,
+    show_title_kh,
+    fast_mode,
+):
+    """Kids tab → CoComelon-style title + nursery script → AI video."""
+    theme = (theme_label or "").strip() or "Humpty Dumpty"
+    title = (custom_title or "").strip()
+    script = (custom_script or "").strip()
+    if theme == "Custom / my idea" and not title and not script:
+        raise gr.Error(
+            "For Custom, write a song title (example: Humpty Dumpty) or paste lyrics."
+        )
+
+    speak_label = (speak_language or "").strip() or KIDS_DEFAULT_SPEAK
+    speak_code = KIDS_SPEAK_LANGUAGES.get(speak_label, "en")
+    voice = (voice_label or "").strip() or KIDS_DEFAULT_VOICE
+    img_src = (image_source or "").strip() or KIDS_DEFAULT_IMAGE_SOURCE
+    urls_text = (image_urls or "").strip()
+
+    out_root = Path(tempfile.mkdtemp(prefix="kids_", dir=str(preferred_temp_root())))
+
+    yield (
+        _loading_html(True, 1, "Starting kids nursery video…"),
+        1,
+        _progress_status(1, "Starting kids nursery video…"),
+        _btn_busy_kids(),
+        gr.update(),
+        gr.update(),
+        gr.update(),
+        gr.update(),
+        gr.update(),
+    )
+
+    q: queue.Queue = queue.Queue()
+    holder: dict = {}
+
+    def on_progress(frac: float, msg: str) -> None:
+        q.put(("progress", float(frac), str(msg)))
+
+    def worker() -> None:
+        try:
+            holder["result"] = create_kids_video(
+                theme,
+                title,
+                script,
+                output_dir=out_root,
+                duration_hours=int(duration_hours or 0),
+                duration_minutes=int(duration_minutes or 3),
+                speak_language=speak_code,
+                voice_label=voice,
+                image_source=img_src,
+                image_urls=urls_text,
+                add_music=bool(add_music),
+                show_captions_kh=bool(show_captions_kh),
+                show_captions_en=bool(show_captions_en),
+                show_note=bool(show_note),
+                video_note=(video_note or "").strip() or "Kids Song",
+                show_title_en=bool(show_title_en),
+                show_title_kh=bool(show_title_kh),
+                fast=bool(fast_mode),
+                progress_cb=on_progress,
+            )
+            holder["draft"] = draft_kids_content(
+                theme,
+                title,
+                script,
+                duration_hours=int(duration_hours or 0),
+                duration_minutes=int(duration_minutes or 3),
+            )
+            holder["speak"] = speak_code
+            holder["image_source"] = img_src
+            q.put(("done", None, None))
+        except Exception as exc:
+            q.put(("error", exc, None))
+
+    threading.Thread(target=worker, daemon=True).start()
+
+    while True:
+        kind, a, b = q.get()
+        if kind == "progress":
+            pct = max(0.0, min(100.0, float(a) * 100.0))
+            msg = b or ""
+            yield (
+                _loading_html(True, pct, msg),
+                pct,
+                _progress_status(pct, msg),
+                _btn_busy_kids(),
+                gr.update(),
+                gr.update(),
+                gr.update(),
+                gr.update(),
+                gr.update(),
+            )
+        elif kind == "error":
+            yield (
+                _loading_html(False, 0, f"Error: {a}"),
+                0,
+                _progress_status(0, f"Error: {a}"),
+                _btn_ready_kids(),
+                gr.update(),
+                gr.update(),
+                gr.update(),
+                gr.update(),
+                gr.update(),
+            )
+            raise gr.Error(f"Kids video failed: {a}") from a
+        elif kind == "done":
+            result = holder["result"]
+            draft = holder.get("draft")
+            speak_code = holder.get("speak", "en")
+            speak_note = "English" if speak_code == "en" else "Khmer"
+            display_title = draft.title if draft else (title or theme)
+            lyrics_preview = (draft.lyrics_en if draft else "")[:900]
+            if draft and len(draft.lyrics_en) > 900:
+                lyrics_preview += "\n…"
+            scene_preview = "\n".join(f"{i + 1}. {s}" for i, s in enumerate(result.scenes[:10]))
+            if len(result.scenes) > 10:
+                scene_preview += f"\n… (+{len(result.scenes) - 10} more)"
+            hours = int(duration_hours or 0)
+            minutes = int(duration_minutes or 0)
+            if hours <= 0 and minutes <= 0:
+                minutes = 3
+            dur_note = f"{hours}h {minutes}m" if hours else f"{minutes} min"
+            voice_line = (
+                f"**Speak:** {speak_note} · **Voice:** {voice}\n\n"
+                f"**Images:** {holder.get('image_source', img_src)}\n\n"
+            )
+            script_label = "English speak script" if speak_code == "en" else "Khmer voice script"
+            summary = (
+                f"**Status:** Kids nursery video ready\n\n"
+                f"**Title (CoComelon-style):** {display_title}\n\n"
+                f"{voice_line}"
+                f"**Target length:** {dur_note}\n\n"
+                f"**Scenes:** {len(result.scenes)}\n\n"
+                f"**English lyrics (preview)**\n\n{lyrics_preview}\n\n"
+                f"**{script_label}**\n\n{result.khmer_text}\n\n"
+                f"**Scene list**\n\n{scene_preview}\n\n"
+                f"**Download:** `{Path(result.video_path).name}`\n\n"
+                f"_Style inspired by toddler nursery channels "
+                f"(e.g. [Humpty Dumpty–style songs](https://youtu.be/hxOApe1P9dM)) — original lyrics/scenes, not a copy._"
+            )
+            yield (
+                _loading_html(False, 100, "Done"),
+                100,
+                _progress_status(100, "Done — download files below."),
+                _btn_ready_kids(),
+                summary,
+                display_title,
+                draft.lyrics_en if draft else "",
                 str(result.video_path),
                 str(result.audio_path),
             )
@@ -965,7 +1263,8 @@ def build_ui() -> gr.Blocks:
             # Khmer AI Video Tools
             **Tab 1:** Upload a video → Khmer voice / subtitles (translates).  
             **Tab 2:** Write text → **AI voice + AI scene video**.  
-            **Tab 3:** Upload a **song video** → AI singing voice + keep music (**no translate**).
+            **Tab 3:** **Kids nursery** → CoComelon-style title + sing-along script → AI video.  
+            **Tab 4:** Upload a **song video** → AI singing voice + keep music (**no translate**).
             """
         )
 
@@ -976,6 +1275,10 @@ def build_ui() -> gr.Blocks:
                     Upload a video in **English, Chinese, Thai,** or other languages.
                     Transcribe → translate to **Khmer (ខ្មែរ)** → subtitles / dub / story.
                     **Keep original music** is ON by default for Khmer voice modes.
+
+                    **Copyright:** This tool does **not** remove copyright. Use only videos you **own**
+                    or have a **license** to edit/publish. Khmer voice, logo, or story rewrite
+                    does not clear YouTube/Facebook Content ID claims on the picture or music.
                     """
                 )
 
@@ -985,6 +1288,11 @@ def build_ui() -> gr.Blocks:
                             label="Upload video (MP4/MOV/MKV/WebM… · up to 5 GB · 1h+ OK, needs time)",
                             file_types=["video", ".mp4", ".mov", ".mkv", ".avi", ".webm", ".m4v", ".wmv"],
                             type="filepath",
+                        )
+                        rights_ok = gr.Checkbox(
+                            label="I own this video or have a license to edit / publish it",
+                            value=False,
+                            info="Required before Convert. Do not upload movies, TV, or others' YouTube clips without permission.",
                         )
                         source_lang = gr.Dropdown(
                             choices=list(SOURCE_LANGUAGES.values()),
@@ -1021,12 +1329,12 @@ def build_ui() -> gr.Blocks:
                         keep_original_music = gr.Checkbox(
                             label="Keep original music — ON = music from upload stays under Khmer voice",
                             value=True,
-                            info="For SPEAKS Khmer modes: keeps the uploaded video soundtrack. Soft/burned subs already keep full original audio.",
+                            info="May still trigger copyright claims if the soundtrack is not yours. Turn OFF + use soft BGM if you only have rights to the video picture.",
                         )
                         add_music = gr.Checkbox(
                             label="Add soft procedural BGM (only if Keep original music is OFF)",
                             value=False,
-                            info="Synthetic calm music — ignored when Keep original music is ON.",
+                            info="Synthetic calm music (not copyrighted stock). Ignored when Keep original music is ON. Does not clear claims on the video picture.",
                         )
                         show_note = gr.Checkbox(
                             label="Show video note (top right)",
@@ -1036,6 +1344,11 @@ def build_ui() -> gr.Blocks:
                             label="Video note text",
                             value="Cinema Summary",
                             placeholder="Cinema Summary",
+                        )
+                        logo_in = gr.File(
+                            label="Upload my logo (top left on video)",
+                            file_types=["image", ".png", ".jpg", ".jpeg", ".webp", ".gif"],
+                            type="filepath",
                         )
 
                         run_btn = gr.Button("Convert to Khmer", variant="primary")
@@ -1105,7 +1418,9 @@ def build_ui() -> gr.Blocks:
                         keep_original_music,
                         show_note,
                         video_note,
+                        logo_in,
                         fast_mode,
+                        rights_ok,
                     ],
                     outputs=[
                         loading_panel,
@@ -1125,9 +1440,12 @@ def build_ui() -> gr.Blocks:
                 gr.Markdown(
                     """
                     ### Tips (Video → Khmer)
+                    - **Copyright:** only convert videos you own or are licensed to use. This app cannot “fix” copyright.
+                    - To reduce **music** claims: turn **Keep original music OFF**, enable **soft procedural BGM** (picture can still be claimed).
                     - **Keep original music** (default ON): Khmer voice + soundtrack from your upload.
                     - Whisper **Base** = better text. Keep a stable internet for Edge TTS.
                     - **Video note** (default: *Cinema Summary*) shows in the **top right** of the output video.
+                    - **Upload my logo** (PNG/JPG with transparency preferred) shows in the **top left**.
                     - Long Chinese filenames are auto-staged to a short path.
                     - Download MP4 and open in VLC.
                     """
@@ -1297,6 +1615,233 @@ def build_ui() -> gr.Blocks:
                     ### Tips
                     - Optional script/prompt only if you want extra control.
                     - Needs internet for AI images + Edge TTS.
+                    """
+                )
+
+            with gr.Tab("Kids → Nursery Video"):
+                gr.Markdown(
+                    """
+                    Make a **toddler nursery video** with titles & scripts like
+                    [CoComelon-style songs](https://youtu.be/hxOApe1P9dM)
+                    (e.g. *Humpty Dumpty Song 🥚 | Nursery Rhymes & Kids Songs*).
+
+                    Pick a theme (or Custom) → **Draft title & lyrics** → **Generate kids video**.
+                    Bright cartoon scenes + Khmer voice (sing-along style lyrics).
+                    """
+                )
+                with gr.Row():
+                    with gr.Column(scale=1):
+                        kids_theme = gr.Dropdown(
+                            choices=KIDS_THEME_CHOICES,
+                            value="Humpty Dumpty",
+                            label="Song theme (CoComelon-style)",
+                        )
+                        kids_title = gr.Textbox(
+                            label="Song title (optional override / required for Custom)",
+                            lines=2,
+                            value="",
+                            placeholder="Humpty Dumpty   →   becomes: Humpty Dumpty Song 🥚 | Nursery Rhymes & Kids Songs",
+                        )
+                        kids_script = gr.Textbox(
+                            label="Optional lyrics / story beats (leave empty to auto-write)",
+                            lines=8,
+                            placeholder=(
+                                "Leave empty for auto nursery lyrics.\n"
+                                "Or paste your own, e.g.:\n"
+                                "Humpty Dumpty sat on a wall.\n"
+                                "Humpty Dumpty had a great fall.\n"
+                                "…"
+                            ),
+                        )
+                        with gr.Row():
+                            kids_hours = gr.Number(
+                                label="Length — Hours",
+                                value=0,
+                                minimum=0,
+                                maximum=1,
+                                precision=0,
+                            )
+                            kids_minutes = gr.Number(
+                                label="Length — Minutes",
+                                value=3,
+                                minimum=1,
+                                maximum=30,
+                                precision=0,
+                            )
+                        kids_speak = gr.Dropdown(
+                            choices=list(KIDS_SPEAK_LANGUAGES.keys()),
+                            value=KIDS_DEFAULT_SPEAK,
+                            label="Speak language — English (default) or Khmer",
+                            info="Voice speaks lyrics in this language.",
+                        )
+                        kids_voice = gr.Dropdown(
+                            choices=list(KIDS_VOICES.keys()),
+                            value=KIDS_DEFAULT_VOICE,
+                            label="Speaker voice (default: English Jenny)",
+                        )
+                        kids_image_source = gr.Dropdown(
+                            choices=list(KIDS_IMAGE_SOURCES.keys()),
+                            value=KIDS_DEFAULT_IMAGE_SOURCE,
+                            label="Image source (for better scene pictures)",
+                            info="Mix = AI cartoon + free stock fallback. Paste your own links below if you have rights.",
+                        )
+                        kids_image_urls = gr.Textbox(
+                            label="Optional image links (direct .jpg/.png URLs, one per line)",
+                            lines=3,
+                            placeholder=(
+                                "https://upload.wikimedia.org/…/example.jpg\n"
+                                "https://images.pexels.com/…/photo.jpeg\n"
+                                "(Do not paste Instagram/TikTok/Facebook page links)"
+                            ),
+                        )
+                        kids_music = gr.Checkbox(
+                            label="Add soft background music",
+                            value=True,
+                        )
+                        kids_captions = gr.Checkbox(
+                            label="Show Khmer captions",
+                            value=False,
+                        )
+                        kids_captions_en = gr.Checkbox(
+                            label="Show English captions (lyrics)",
+                            value=True,
+                        )
+                        kids_show_note = gr.Checkbox(
+                            label="Show video note (top right)",
+                            value=True,
+                        )
+                        kids_note = gr.Textbox(
+                            label="Video note text",
+                            value="Kids Song",
+                            placeholder="Kids Song",
+                        )
+                        kids_title_en = gr.Checkbox(
+                            label="Show English title (top right)",
+                            value=True,
+                        )
+                        kids_title_kh = gr.Checkbox(
+                            label="Show Khmer title (top right)",
+                            value=False,
+                        )
+                        kids_fast = gr.Checkbox(label="Faster encode", value=True)
+
+                        kids_draft_btn = gr.Button("Draft title & lyrics", variant="secondary")
+                        kids_btn = gr.Button("Generate kids video", variant="primary")
+
+                        gr.Markdown("### Progress")
+                        kids_loading = gr.HTML(value=_loading_html(False))
+                        kids_bar = gr.Slider(
+                            minimum=0,
+                            maximum=100,
+                            value=0,
+                            step=1,
+                            interactive=False,
+                            label="Generate progress (%)",
+                        )
+                        kids_status = gr.Markdown("**Progress: 0%** — Ready")
+
+                    with gr.Column(scale=1):
+                        kids_summary = gr.Markdown(
+                            value=(
+                                "**Preview:** Click **Draft title & lyrics** to see a "
+                                "CoComelon-style title + sing-along script before generating."
+                            ),
+                            label="Result",
+                        )
+                        kids_title_out = gr.Textbox(
+                            label="Formatted YouTube-style title",
+                            lines=2,
+                            interactive=False,
+                        )
+                        kids_lyrics_out = gr.Textbox(
+                            label="English lyrics / script",
+                            lines=12,
+                            interactive=False,
+                        )
+                        kids_video = gr.File(label="Download kids video (.mp4)")
+                        kids_audio = gr.File(label="Download AI voice (.mp3 / .m4a)")
+
+                kids_speak.change(
+                    fn=_kids_voices_for_speak,
+                    inputs=[kids_speak],
+                    outputs=[kids_voice],
+                )
+
+                kids_draft_btn.click(
+                    fn=preview_kids_draft,
+                    inputs=[
+                        kids_theme,
+                        kids_title,
+                        kids_script,
+                        kids_hours,
+                        kids_minutes,
+                    ],
+                    outputs=[kids_title_out, kids_lyrics_out, kids_summary],
+                )
+
+                kids_btn.click(
+                    fn=process_kids_video,
+                    inputs=[
+                        kids_theme,
+                        kids_title,
+                        kids_script,
+                        kids_speak,
+                        kids_voice,
+                        kids_image_source,
+                        kids_image_urls,
+                        kids_hours,
+                        kids_minutes,
+                        kids_music,
+                        kids_captions,
+                        kids_captions_en,
+                        kids_show_note,
+                        kids_note,
+                        kids_title_en,
+                        kids_title_kh,
+                        kids_fast,
+                    ],
+                    outputs=[
+                        kids_loading,
+                        kids_bar,
+                        kids_status,
+                        kids_btn,
+                        kids_summary,
+                        kids_title_out,
+                        kids_lyrics_out,
+                        kids_video,
+                        kids_audio,
+                    ],
+                    show_progress="full",
+                )
+
+                gr.Markdown(
+                    """
+                    ### Title & script style (follow this pattern)
+                    | Piece | Example |
+                    |-------|---------|
+                    | Title | `Humpty Dumpty Song 🥚 \\| Nursery Rhymes & Kids Songs` |
+                    | Also | `Bananaphone Song 🍌 \\| Nursery Rhymes & Kids Songs` |
+                    | Also | `Yummy Peas Song 🥦 \\| Fruit & Vegetables for Kids` |
+                    | Script | Short repeating verses + *Wow! Yay!* energy (like Humpty Dumpty) |
+
+                    ### Quick start
+                    1. Theme: **Humpty Dumpty** (matches the sample link style)
+                    2. **Speak:** English · **Speaker:** English — Female (Jenny)
+                    3. **Images:** AI + stock mix (recommended) — or paste your own image URLs
+                    4. Length: **3 minutes** → **Generate kids video**
+
+                    ### Better images — what to use
+                    | Source | Use? | Notes |
+                    |--------|------|-------|
+                    | **AI cartoon (Pollinations)** | ✅ Recommended | Original nursery scenes, no key needed |
+                    | **Wikimedia Commons** | ✅ Built-in stock fallback | Free educational art |
+                    | **[Pexels](https://www.pexels.com/api/)** | ✅ Best stock quality | Set env `PEXELS_API_KEY` |
+                    | **[Unsplash](https://unsplash.com/developers)** | ✅ | Set env `UNSPLASH_ACCESS_KEY` |
+                    | **Your own CDN / Drive direct links** | ✅ | Paste `.jpg` / `.png` URLs you own |
+                    | Instagram / TikTok / Facebook / YouTube pages | ❌ | Blocked — ToS + copyright; use direct image files only |
+
+                    Optional: `POLLINATIONS_API_KEY` for higher AI image limits ([enter.pollinations.ai](https://enter.pollinations.ai)).
+                    Needs internet for images + Edge TTS.
                     """
                 )
 

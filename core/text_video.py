@@ -25,7 +25,7 @@ from . import download_video_stem, preferred_temp_root, run_ffmpeg
 from .fonts import ensure_battambang_fonts
 from .khmer_render import render_khmer_line
 from .music import generate_bgm, mix_voice_and_music
-from .text_clean import clean_khmer_text, prepare_speak_text
+from .text_clean import clean_khmer_text, prepare_english_speak_text, prepare_speak_text
 from .translate import translate_text
 from .tts import get_duration_seconds, resolve_voice, text_to_speech
 
@@ -829,6 +829,11 @@ def _style_suffix(style: str) -> str:
         "storybook": "soft storybook illustration, warm colors, gentle light",
         "nature": "nature wildlife photography, golden hour, serene",
         "modern": "modern cinematic color grade, clean aesthetic",
+        "kids": (
+            "bright colorful 3D preschool cartoon, cute toddler with big friendly eyes, "
+            "soft rounded shapes, highly saturated happy colors, sunny wholesome lighting, "
+            "nursery rhyme animation still"
+        ),
         "match": "",  # visual prompt already has full style
     }
     return styles.get(style, styles["cinematic"])
@@ -1383,13 +1388,19 @@ def build_scene_specs(
     style: str = "cinematic",
     video_title: str = "",
     target_seconds: float = 60.0,
+    speak_language: str = "km",
 ) -> tuple[str, list[SceneSpec], str]:
     """
     Build scene list from user text.
     Returns (khmer_summary, scenes, resolved_mode).
+
+    speak_language: "km" (default) speaks Khmer; "en" speaks English lyrics/script.
     """
     title = re.sub(r"\s+", " ", (video_title or "").strip())
     text = (text or "").strip()
+    speak_lang = (speak_language or "km").split("-")[0].lower()
+    if speak_lang not in ("en", "km"):
+        speak_lang = "km"
 
     # Title-only / title mode: AI expands story from short title
     use_title = mode == "title" or (
@@ -1399,12 +1410,16 @@ def build_scene_specs(
         khmer, scenes = expand_title_to_scenes(
             title, style=style, target_seconds=target_seconds
         )
+        if speak_lang == "en":
+            scenes = _scenes_speak_english_from_captions(scenes)
         return khmer, scenes, "title"
 
     if not text and title:
         khmer, scenes = expand_title_to_scenes(
             title, style=style, target_seconds=target_seconds
         )
+        if speak_lang == "en":
+            scenes = _scenes_speak_english_from_captions(scenes)
         return khmer, scenes, "title"
 
     if not text:
@@ -1420,35 +1435,138 @@ def build_scene_specs(
         beats = split_visual_beats(text)
         narrate_parts: list[str] = []
         for img_prompt, narrate_en in beats:
-            try:
-                kh = clean_khmer_text(translate_text(narrate_en, source="en"))
-            except Exception:
-                kh = ""
-            if not kh and narrate_en:
+            caption_en = re.sub(r"\s+", " ", (narrate_en or "").strip())
+            if speak_lang == "en":
+                speak = prepare_english_speak_text(narrate_en) if narrate_en else ""
                 try:
-                    kh = clean_khmer_text(translate_text(narrate_en[:200], source="auto"))
+                    kh = clean_khmer_text(translate_text(narrate_en, source="en")) if narrate_en else ""
                 except Exception:
                     kh = ""
+                scenes.append(
+                    SceneSpec(
+                        image_prompt=img_prompt,
+                        speak_text=speak or ".",
+                        caption=prepare_speak_text(kh) if kh else "",
+                        caption_en=caption_en,
+                    )
+                )
+                if speak:
+                    narrate_parts.append(speak)
+            else:
+                try:
+                    kh = clean_khmer_text(translate_text(narrate_en, source="en"))
+                except Exception:
+                    kh = ""
+                if not kh and narrate_en:
+                    try:
+                        kh = clean_khmer_text(translate_text(narrate_en[:200], source="auto"))
+                    except Exception:
+                        kh = ""
 
-            speak = prepare_speak_text(kh) if kh else ""
-            caption_kh = speak
-            caption_en = re.sub(r"\s+", " ", (narrate_en or "").strip())
+                speak = prepare_speak_text(kh) if kh else ""
+                scenes.append(
+                    SceneSpec(
+                        image_prompt=img_prompt,
+                        speak_text=speak or "។",
+                        caption=speak if speak else "",
+                        caption_en=caption_en,
+                    )
+                )
+                if speak:
+                    narrate_parts.append(speak)
 
+        if speak_lang == "en":
+            summary = " ".join(narrate_parts) if narrate_parts else text[:500]
+        else:
+            summary = " ".join(narrate_parts) if narrate_parts else prepare_khmer_script(text[:500], "en")
+        return summary, scenes, "visual"
+
+    # Script / story mode — English speak keeps original lines for TTS
+    if speak_lang == "en":
+        en_source = text if not _looks_khmer(text) else ""
+        if not en_source:
+            # Khmer script but user asked English voice — translate to EN for speak
+            try:
+                from deep_translator import GoogleTranslator
+
+                en_source = GoogleTranslator(source="km", target="en").translate(text[:4000]) or text
+            except Exception:
+                en_source = text
+        en_scenes = split_script_scenes(en_source)
+        try:
+            khmer = prepare_khmer_script(text, source_language=source_language)
+        except Exception:
+            khmer = ""
+        subjects = extract_subjects(en_source or text)
+        ghosts = extract_ghosts(en_source or text)
+        people = extract_people(en_source or text)
+        if ghosts:
+            display = _ghost_display_name(ghosts[0])
+            subject_prefix = (
+                f"cinematic horror shot of {display} clearly visible, "
+                f"{display} as main supernatural subject, "
+            )
+        elif people and style != "kids":
+            display = _people_display_name(people[0])
+            subject_prefix = (
+                f"photorealistic medium shot of {display}, "
+                f"{display} in the foreground filling the frame, "
+            )
+        elif subjects:
+            subject_prefix = f"Photorealistic {', '.join(subjects)} as main subjects, "
+        else:
+            subject_prefix = ""
+
+        narrate_en: list[str] = []
+        for idx, scene in enumerate(en_scenes):
+            speak = prepare_english_speak_text(scene)
+            if not speak:
+                continue
+            caption_en = re.sub(r"\s+", " ", scene.strip())
+            # Optional Khmer caption line
+            try:
+                cap_kh = prepare_speak_text(
+                    clean_khmer_text(translate_text(caption_en, source="en"))
+                )
+            except Exception:
+                cap_kh = ""
+            if style == "kids":
+                img = (
+                    f"{subject_prefix}{caption_en[:140]}, "
+                    f"{_style_suffix(style)}, no text, no watermark, no letters"
+                )
+            elif ghosts:
+                img = (
+                    f"{subject_prefix}{caption_en[:180]}, "
+                    f"ethereal translucent ghost, spectral mist, {_style_suffix(style)}, "
+                    f"no text, no watermark"
+                )
+            elif people:
+                img = (
+                    f"{subject_prefix}{caption_en[:180]}, "
+                    f"face and body clearly visible, {_style_suffix(style)}, "
+                    f"no text, no watermark"
+                )
+            else:
+                img = (
+                    f"{subject_prefix}{caption_en[:220]}, "
+                    f"{_style_suffix(style)}, no text, no watermark"
+                )
+            img = reinforce_animals_in_prompt(img, text, speak)
             scenes.append(
                 SceneSpec(
-                    image_prompt=img_prompt,
-                    speak_text=speak or "។",
-                    caption=caption_kh if speak else "",
+                    image_prompt=img,
+                    speak_text=speak,
+                    caption=cap_kh,
                     caption_en=caption_en,
                 )
             )
-            if speak:
-                narrate_parts.append(speak)
+            narrate_en.append(speak)
+        summary = " ".join(narrate_en) if narrate_en else en_source
+        # Keep Khmer translation available in summary field when present
+        return (khmer or summary), scenes, "script"
 
-        khmer_summary = " ".join(narrate_parts) if narrate_parts else prepare_khmer_script(text[:500], "en")
-        return khmer_summary, scenes, "visual"
-
-    # Script / story mode
+    # Script / story mode (Khmer speak — original behavior)
     khmer = prepare_khmer_script(text, source_language=source_language)
     en_scenes = split_script_scenes(text) if not _looks_khmer(text) else []
     subjects = extract_subjects(text)
@@ -1512,10 +1630,17 @@ def build_scene_specs(
             )
             # Prefer original English text snippet for image model when available
             if not _looks_khmer(text):
-                img = (
-                    f"{subject_prefix}{text[:220]}, scene focus: {speak[:60]}, "
-                    f"{_style_suffix(style)}, no text, no watermark"
-                )
+                if style == "kids" and idx < len(en_scenes):
+                    focus = en_scenes[idx][:140]
+                    img = (
+                        f"{subject_prefix}{focus}, "
+                        f"{_style_suffix(style)}, no text, no watermark, no letters"
+                    )
+                else:
+                    img = (
+                        f"{subject_prefix}{text[:220]}, scene focus: {speak[:60]}, "
+                        f"{_style_suffix(style)}, no text, no watermark"
+                    )
         img = reinforce_animals_in_prompt(img, text, speak)
         scenes.append(
             SceneSpec(
@@ -1528,6 +1653,22 @@ def build_scene_specs(
     return khmer, scenes, "script"
 
 
+def _scenes_speak_english_from_captions(scenes: list[SceneSpec]) -> list[SceneSpec]:
+    """Prefer English caption_en as TTS line (title-mode kids / EN speak)."""
+    out: list[SceneSpec] = []
+    for s in scenes:
+        en = prepare_english_speak_text(s.caption_en or "")
+        out.append(
+            SceneSpec(
+                image_prompt=s.image_prompt,
+                speak_text=en or s.speak_text,
+                caption=s.caption,
+                caption_en=s.caption_en or en,
+            )
+        )
+    return out
+
+
 def _fallback_scene_image(width: int, height: int, seed: str, style: str) -> Image.Image:
     h = int(hashlib.md5(seed.encode("utf-8")).hexdigest()[:8], 16)
     palettes = {
@@ -1535,6 +1676,7 @@ def _fallback_scene_image(width: int, height: int, seed: str, style: str) -> Ima
         "storybook": [(255, 236, 210), (255, 180, 140), (120, 170, 200)],
         "nature": [(20, 60, 40), (60, 120, 70), (200, 180, 100)],
         "modern": [(15, 20, 35), (40, 80, 120), (180, 200, 220)],
+        "kids": [(255, 200, 80), (120, 210, 255), (255, 140, 180), (100, 220, 140)],
         "match": [(18, 55, 40), (40, 100, 70), (120, 160, 90)],
     }
     colors = palettes.get(style, palettes["cinematic"])
@@ -1570,99 +1712,53 @@ def fetch_ai_scene_image(
     style: str = "cinematic",
     seed: int | None = None,
     timeout: int = 90,
+    image_source: str = "ai",
+    ref_urls: list[str] | None = None,
 ) -> Path:
     """
-    Download AI image. For people prompts: portrait-first, enhance OFF
-    (Pollinations enhance often rewrites humans into empty landscapes).
+    Download scene image via AI / stock / user URLs.
+    Kids style uses stronger cartoon prompts + multi-source fallbacks.
     """
-    out_path = Path(out_path)
-    out_path.parent.mkdir(parents=True, exist_ok=True)
+    from .scene_images import fetch_scene_image
 
+    # Legacy people/ghost hard prompts still help AI fidelity
     people = extract_people(prompt)
     ghosts = extract_ghosts(prompt)
     subjects = extract_subjects(prompt)
-
-    def _try_download(prompt_use: str, use_seed: int, *, enhance: bool = False) -> bool:
-        prompt_use = re.sub(r"\s+", " ", prompt_use).strip()[:360]
-        if not prompt_use:
-            return False
-        encoded = urllib.parse.quote(prompt_use)
-        # enhance=true often drops people → scenery; keep OFF for subject lock
-        url = (
-            f"https://image.pollinations.ai/prompt/{encoded}"
-            f"?width={width}&height={height}&seed={use_seed}"
-            f"&nologo=true&enhance={'true' if enhance else 'false'}&model=flux"
-        )
-        try:
-            req = urllib.request.Request(url, headers={"User-Agent": "video-to-khmer/1.3"})
-            with urllib.request.urlopen(req, timeout=timeout) as resp:
-                data = resp.read()
-            if not data or len(data) < 8000:
-                return False
-            img = Image.open(io.BytesIO(data)).convert("RGB")
-            img = img.resize((width, height), Image.Resampling.LANCZOS)
-            img = ImageEnhance.Contrast(img).enhance(1.08)
-            img = ImageEnhance.Color(img).enhance(1.05)
-            img.save(out_path, "JPEG", quality=93)
-            return out_path.stat().st_size > 12000
-        except Exception:
-            return False
-
-    base_seed = (
-        int(seed)
-        if seed is not None
-        else int(hashlib.md5(prompt.encode("utf-8")).hexdigest()[:8], 16) % 100000
-    )
-
-    # 1) Main prompt, no enhance (best subject fidelity)
-    if _try_download(prompt, base_seed, enhance=False):
-        return out_path
-
-    # 2) Ghost: hard horror fallback
-    if ghosts:
+    use_prompt = prompt
+    if style == "kids":
+        use_prompt = prompt
+    elif ghosts:
         display = _ghost_display_name(ghosts[0])
-        horror = (
+        use_prompt = (
             f"cinematic horror photo of {display}, "
             f"translucent glowing ghost clearly visible, pale face, "
-            f"spectral mist, dark atmosphere, ghost filling the frame, 4K"
+            f"spectral mist, dark atmosphere, ghost filling the frame, 4K, {prompt[:120]}"
         )
-        if _try_download(horror, base_seed + 7, enhance=False):
-            return out_path
-        if _try_download(horror, base_seed + 8, enhance=True):
-            return out_path
-
-    # 3) People: hard portrait fallback (very short, subject-only)
-    if people:
+    elif people:
         display = _people_display_name(people[0])
-        portrait = (
+        use_prompt = (
             f"photorealistic portrait photo of {display}, "
             f"face clearly visible, upper body, detailed human skin, "
-            f"person filling the frame, natural light, 4K"
+            f"person filling the frame, natural light, 4K, {prompt[:100]}"
         )
-        if _try_download(portrait, base_seed + 11, enhance=False):
-            return out_path
-        # last AI try with enhance
-        if _try_download(portrait, base_seed + 22, enhance=True):
-            return out_path
-
-    # 4) Shorten original
-    short = prompt.split(", no text")[0][:160]
-    if _try_download(short, base_seed + 1, enhance=False):
-        return out_path
-
-    # 5) Animal / subject tiny prompt
-    if subjects and not people and not ghosts:
-        tiny = (
+    elif subjects and style != "kids":
+        use_prompt = (
             f"{', '.join(subjects)}, realistic photo, "
-            f"sharp focus, natural lighting, 4K, no text"
+            f"sharp focus, natural lighting, 4K, no text, {prompt[:100]}"
         )
-        if _try_download(tiny, base_seed + 2, enhance=False):
-            return out_path
 
-    img = _fallback_scene_image(width, height, prompt, style)
-    img.save(out_path, "JPEG", quality=90)
-    return out_path
-
+    return fetch_scene_image(
+        use_prompt,
+        Path(out_path),
+        width=width,
+        height=height,
+        style=style if style in ("kids", "storybook", "cinematic", "nature", "modern") else "cinematic",
+        seed=seed,
+        source=image_source or "ai",
+        ref_urls=ref_urls,
+        timeout=timeout,
+    )
 
 def _compose_captioned_frame(
     background: Image.Image,
@@ -2027,6 +2123,9 @@ def create_video_from_text(
     voice_label: str = "Female (Sreymom)",
     style: str = "cinematic",
     mode: str = "auto",
+    speak_language: str = "km",
+    image_source: str = "ai",
+    image_urls: str | list[str] | None = None,
     add_music: bool = False,
     show_captions_kh: bool = False,
     show_captions_en: bool = False,
@@ -2043,6 +2142,9 @@ def create_video_from_text(
     text/title → AI images + AI voice → MP4.
 
     mode: auto | title | visual | script
+    speak_language: km (Khmer TTS) | en (English TTS)
+    image_source: ai | mix | stock | urls
+    image_urls: optional direct image links (paste or list)
     duration_hours + duration_minutes set target length (especially title mode).
     """
 
@@ -2050,9 +2152,21 @@ def create_video_from_text(
         if progress_cb:
             progress_cb(frac, msg)
 
+    from .scene_images import IMAGE_SOURCE_CHOICES, parse_image_urls
+
     title = re.sub(r"\s+", " ", (video_title or "").strip())
     text = (text or "").strip()
     target_sec = parse_target_duration(duration_hours, duration_minutes)
+    speak_lang = (speak_language or "km").split("-")[0].lower()
+    if speak_lang not in ("en", "km"):
+        speak_lang = "km"
+    img_src = IMAGE_SOURCE_CHOICES.get(image_source or "", image_source or "ai")
+    if img_src not in ("ai", "mix", "stock", "urls"):
+        img_src = "ai"
+    if isinstance(image_urls, list):
+        ref_urls = [u for u in image_urls if u]
+    else:
+        ref_urls = parse_image_urls(image_urls or "")
 
     tick("Understanding your title / text…", 0.04)
     visual_like = mode == "visual" or (
@@ -2071,6 +2185,7 @@ def create_video_from_text(
         style=use_style if use_style != "match" else style,
         video_title=title,
         target_seconds=target_sec,
+        speak_language=speak_lang,
     )
     if not specs:
         raise ValueError("No usable scenes from this text.")
@@ -2122,14 +2237,18 @@ def create_video_from_text(
     n = len(specs)
     # Same seed family → more consistent animals across scenes
     base_seed = int(hashlib.md5(seed_src.encode("utf-8")).hexdigest()[:8], 16) % 90000
+    empty_mark = "." if speak_lang == "en" else "។"
 
     for i, spec in enumerate(specs):
         base = 0.08 + 0.75 * (i / max(1, n))
         tick(f"AI image + voice {i + 1}/{n}…", base)
 
         mp3 = scenes_dir / f"voice_{i:03d}.mp3"
-        speak = prepare_speak_text(spec.speak_text)
-        if speak and speak not in ("។",):
+        if speak_lang == "en":
+            speak = prepare_english_speak_text(spec.speak_text)
+        else:
+            speak = prepare_speak_text(spec.speak_text)
+        if speak and speak not in (empty_mark, "។", "."):
             try:
                 text_to_speech(speak, voice, mp3, rate="-5%")
             except Exception:
@@ -2145,6 +2264,8 @@ def create_video_from_text(
             height=height,
             style=use_style if use_style != "match" else "nature",
             seed=base_seed + i * 17,
+            image_source=img_src,
+            ref_urls=ref_urls,
         )
 
         clip = scenes_dir / f"clip_{i:03d}.mp4"

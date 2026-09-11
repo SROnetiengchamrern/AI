@@ -50,6 +50,16 @@ def prepare_speak_text(text: str) -> str:
     return _MULTI_SPACE.sub(" ", t).strip()
 
 
+def prepare_english_speak_text(text: str) -> str:
+    """Pause-friendly English text for Edge TTS (kids / EN speak)."""
+    t = clean_source_text(text)
+    t = t.replace("…", "...").replace("—", "-").replace("–", "-")
+    t = re.sub(r"\s+", " ", t).strip(" |/-")
+    if t and not re.search(r"[.!?]$", t):
+        t += "."
+    return t
+
+
 def prepare_lyric_text(text: str) -> str:
     """Original-language song lyrics for AI re-sing (no translation)."""
     t = clean_source_text(text)

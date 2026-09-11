@@ -10,8 +10,19 @@ import edge_tts
 
 from . import KHMER_VOICES, run_ffmpeg
 from .khmer_render import save_subtitle_png
-from .text_clean import prepare_speak_text
+from .text_clean import prepare_english_speak_text, prepare_speak_text
 from .transcribe import Segment
+
+
+def _prep_for_tts(text: str, voice: str = "") -> str:
+    """Pick Khmer vs English cleaner based on script / voice id."""
+    t = text or ""
+    voice_l = (voice or "").lower()
+    if re.search(r"[\u1780-\u17FF]", t) or voice_l.startswith("km-"):
+        return prepare_speak_text(t)
+    if re.search(r"[A-Za-z]", t) or voice_l.startswith("en-"):
+        return prepare_english_speak_text(t)
+    return prepare_speak_text(t)
 
 
 async def _synthesize(text: str, voice: str, out_path: Path, *, rate: str = "-5%") -> None:
@@ -66,7 +77,7 @@ def text_to_speech(
 ) -> Path:
     out_path = Path(out_path)
     out_path.parent.mkdir(parents=True, exist_ok=True)
-    speak = prepare_speak_text(text)
+    speak = _prep_for_tts(text, voice)
     if not speak:
         raise ValueError("No text to synthesize")
     asyncio.run(_synthesize_with_retry(speak, voice, out_path, rate=rate))
@@ -84,7 +95,7 @@ async def _synthesize_many(
     Generate TTS clips in small chunks.
     Long videos used to flood Edge TTS → random missing voice lines.
     """
-    prep_fn = prep or prepare_speak_text
+    prep_fn = prep or (lambda t: _prep_for_tts(t, voice))
 
     async def one(text: str, path: Path) -> None:
         speak = prep_fn(text)
@@ -891,23 +902,64 @@ def _render_note_badge(text: str, *, video_width: int) -> "Image.Image":
     return badge
 
 
+def _prepare_logo_rgba(
+    logo_path: str | Path,
+    *,
+    video_width: int,
+    video_height: int | None = None,
+    max_width_ratio: float = 0.14,
+    max_height_ratio: float = 0.12,
+):
+    """Load user logo and scale for top-left placement (keeps transparency)."""
+    from PIL import Image
+
+    path = Path(logo_path)
+    if not path.is_file():
+        return None
+    try:
+        img = Image.open(path).convert("RGBA")
+    except Exception:
+        return None
+
+    vh = video_height or max(1, int(video_width * 9 / 16))
+    max_w = max(48, int(video_width * max_width_ratio))
+    max_h = max(36, int(vh * max_height_ratio))
+    tw, th = img.size
+    if tw <= 0 or th <= 0:
+        return None
+    scale = min(max_w / tw, max_h / th, 1.0)
+    # Upscale tiny logos a bit so they remain readable
+    if max(tw, th) < 64:
+        scale = min(max_w / tw, max_h / th)
+    nw = max(1, int(tw * scale))
+    nh = max(1, int(th * scale))
+    return img.resize((nw, nh), Image.Resampling.LANCZOS)
+
+
 def overlay_video_note(
     video_path: str | Path,
     note_text: str,
     output_path: str | Path,
     *,
+    logo_path: str | Path | None = None,
     fast: bool = True,
 ) -> Path:
     """
-    Burn a top-right video note badge (e.g. 'Cinema Summary') for the full duration.
-    Supports English and Khmer note text.
+    Burn branding overlays for the full duration:
+      - optional top-right note badge (e.g. 'Cinema Summary')
+      - optional top-left logo (user upload)
+    Supports English and Khmer note text. PNG/JPG/WebP logos with alpha OK.
     """
     from PIL import Image
 
     video_path = Path(video_path)
     output_path = Path(output_path)
     note_text = (note_text or "").strip()
-    if not note_text:
+    logo = Path(logo_path) if logo_path else None
+    if logo is not None and not logo.is_file():
+        logo = None
+
+    if not note_text and logo is None:
         if Path(video_path).resolve() != output_path.resolve():
             import shutil
 
@@ -915,18 +967,26 @@ def overlay_video_note(
         return output_path
 
     output_path.parent.mkdir(parents=True, exist_ok=True)
-    width, _height = get_video_size(video_path)
+    width, height = get_video_size(video_path)
     duration = max(0.5, get_duration_seconds(video_path))
-
-    badge = _render_note_badge(note_text, video_width=width)
-    # Full-frame transparent overlay with badge top-right
-    overlay = Image.new("RGBA", (width, max(1, _height)), (0, 0, 0, 0))
     margin = max(16, width // 50)
-    x = max(0, width - badge.width - margin)
-    y = margin
-    overlay.alpha_composite(badge, (x, y))
 
-    png = output_path.parent / f"{output_path.stem}_note.png"
+    overlay = Image.new("RGBA", (width, max(1, height)), (0, 0, 0, 0))
+
+    if logo is not None:
+        logo_img = _prepare_logo_rgba(
+            logo, video_width=width, video_height=height
+        )
+        if logo_img is not None:
+            overlay.alpha_composite(logo_img, (margin, margin))
+
+    if note_text:
+        badge = _render_note_badge(note_text, video_width=width)
+        x = max(0, width - badge.width - margin)
+        y = margin
+        overlay.alpha_composite(badge, (x, y))
+
+    png = output_path.parent / f"{output_path.stem}_brand.png"
     overlay.save(png, "PNG")
 
     preset = "ultrafast" if fast else "veryfast"
@@ -965,4 +1025,23 @@ def overlay_video_note(
 
 
 def resolve_voice(label: str) -> str:
-    return KHMER_VOICES.get(label, label)
+    """Map UI voice label → Edge TTS voice id (Khmer + common EN/kids labels)."""
+    from . import KHMER_VOICES
+
+    if label in KHMER_VOICES:
+        return KHMER_VOICES[label]
+    # Already a Neural voice id
+    if isinstance(label, str) and "Neural" in label:
+        return label
+    extras = {
+        "English — Female (Jenny)": "en-US-JennyNeural",
+        "English — Female (Aria)": "en-US-AriaNeural",
+        "English — Female (Ana)": "en-US-AnaNeural",
+        "English — Male (Guy)": "en-US-GuyNeural",
+        "English — Male (Christopher)": "en-US-ChristopherNeural",
+        "Khmer — Female (Sreymom)": "km-KH-SreymomNeural",
+        "Khmer — Male (Piseth)": "km-KH-PisethNeural",
+        "Female (Sreymom)": "km-KH-SreymomNeural",
+        "Male (Piseth)": "km-KH-PisethNeural",
+    }
+    return extras.get(label, label)

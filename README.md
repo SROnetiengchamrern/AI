@@ -34,6 +34,21 @@ Internet is required for:
 
 `ffmpeg` is bundled via `imageio-ffmpeg` (no system install required).
 
+## Free AI MCP (Cursor)
+
+This project ships Cursor MCP config in `.cursor/mcp.json`:
+
+| Server | Cost | Use for |
+|--------|------|---------|
+| **pollinations** | Free tier (optional API key) | Images, short video, 3D via MCP chat |
+| **krea-ai** | Credits | Higher-quality video / 3D when you have balance |
+
+1. Restart Cursor (or reload MCP servers) after cloning.
+2. Optional: copy `.env.example` → `.env` and set `POLLINATIONS_API_KEY` from [enter.pollinations.ai/keys](https://enter.pollinations.ai/keys) for better rate limits.
+3. Same key is picked up by Kids / Text → AI Video scene images (`POLLINATIONS_API_KEY`).
+
+In chat you can ask: *“Generate a CoComelon-style toddler nursery still with Pollinations.”*
+
 ## Web UI
 
 ```bash

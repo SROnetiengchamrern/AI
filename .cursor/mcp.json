@@ -1,0 +1,11 @@
+{
+  "mcpServers": {
+    "krea-ai": {
+      "url": "https://api.krea.ai/mcp"
+    },
+    "pollinations": {
+      "command": "npx",
+      "args": ["-y", "@pollinations/mcp"]
+    }
+  }
+}
