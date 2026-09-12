@@ -635,15 +635,15 @@ def preview_kids_draft(theme_label, custom_title, custom_script, duration_hours,
             duration_minutes=int(duration_minutes or 3),
         )
     except Exception as exc:
-        raise gr.Error(f"Could not draft kids song: {exc}") from exc
+        raise gr.Error(f"Could not draft kids story: {exc}") from exc
     lyrics_preview = (draft.lyrics_en or "")[:500]
     if draft.lyrics_en and len(draft.lyrics_en) > 500:
         lyrics_preview += "…"
     summary = (
-        f"**Draft ready** — title follows CoComelon-style pattern.\n\n"
+        f"**Draft ready** — spoken story (not singing).\n\n"
         f"**Title:** {draft.title}\n\n"
         f"**Speak language:** English by default (change under Speak).\n\n"
-        f"**English lyrics (preview)**\n\n{lyrics_preview}\n\n"
+        f"**English speak script (preview)**\n\n{lyrics_preview}\n\n"
         f"_Click **Generate kids video** to render with English (or Khmer) speaker._"
     )
     return draft.title, draft.lyrics_en, summary
@@ -682,13 +682,13 @@ def process_kids_video(
     show_title_kh,
     fast_mode,
 ):
-    """Kids tab → CoComelon-style title + nursery script → AI video."""
-    theme = (theme_label or "").strip() or "Humpty Dumpty"
+    """Kids tab → spoken story title + short beats → 3D cartoon AI video."""
+    theme = (theme_label or "").strip() or "New Kid, New Friend"
     title = (custom_title or "").strip()
     script = (custom_script or "").strip()
     if theme == "Custom / my idea" and not title and not script:
         raise gr.Error(
-            "For Custom, write a song title (example: Humpty Dumpty) or paste lyrics."
+            "For Custom, write a story title (example: New Kid, New Friend) or paste speak lines."
         )
 
     speak_label = (speak_language or "").strip() or KIDS_DEFAULT_SPEAK
@@ -734,7 +734,7 @@ def process_kids_video(
                 show_captions_kh=bool(show_captions_kh),
                 show_captions_en=bool(show_captions_en),
                 show_note=bool(show_note),
-                video_note=(video_note or "").strip() or "Kids Song",
+                video_note=(video_note or "").strip() or "Kids Story",
                 show_title_en=bool(show_title_en),
                 show_title_kh=bool(show_title_kh),
                 fast=bool(fast_mode),
@@ -807,17 +807,16 @@ def process_kids_video(
             )
             script_label = "English speak script" if speak_code == "en" else "Khmer voice script"
             summary = (
-                f"**Status:** Kids nursery video ready\n\n"
-                f"**Title (CoComelon-style):** {display_title}\n\n"
+                f"**Status:** Kids story video ready\n\n"
+                f"**Title:** {display_title}\n\n"
                 f"{voice_line}"
                 f"**Target length:** {dur_note}\n\n"
                 f"**Scenes:** {len(result.scenes)}\n\n"
-                f"**English lyrics (preview)**\n\n{lyrics_preview}\n\n"
+                f"**English speak script (preview)**\n\n{lyrics_preview}\n\n"
                 f"**{script_label}**\n\n{result.khmer_text}\n\n"
                 f"**Scene list**\n\n{scene_preview}\n\n"
                 f"**Download:** `{Path(result.video_path).name}`\n\n"
-                f"_Style inspired by toddler nursery channels "
-                f"(e.g. [Humpty Dumpty–style songs](https://youtu.be/hxOApe1P9dM)) — original lyrics/scenes, not a copy._"
+                f"_Spoken story + 3D cartoon stills (not singing)._"
             )
             yield (
                 _loading_html(False, 100, "Done"),
@@ -1263,7 +1262,7 @@ def build_ui() -> gr.Blocks:
             # Khmer AI Video Tools
             **Tab 1:** Upload a video → Khmer voice / subtitles (translates).  
             **Tab 2:** Write text → **AI voice + AI scene video**.  
-            **Tab 3:** **Kids nursery** → CoComelon-style title + sing-along script → AI video.  
+            **Tab 3:** **Kids story** → 3D cartoon stills + bounce motion + **spoken** voice (not singing).  
             **Tab 4:** Upload a **song video** → AI singing voice + keep music (**no translate**).
             """
         )
@@ -1621,36 +1620,43 @@ def build_ui() -> gr.Blocks:
             with gr.Tab("Kids → Nursery Video"):
                 gr.Markdown(
                     """
-                    Make a **toddler nursery video** with titles & scripts like
-                    [CoComelon-style songs](https://youtu.be/hxOApe1P9dM)
-                    (e.g. *Humpty Dumpty Song 🥚 | Nursery Rhymes & Kids Songs*).
+                    Make a **toddler 3D cartoon story video** with short **spoken** lines
+                    (not sing-along).
 
-                    Pick a theme (or Custom) → **Draft title & lyrics** → **Generate kids video**.
-                    Bright cartoon scenes + Khmer voice (sing-along style lyrics).
+                    Example: *New Kid, New Friend Story 🏫 | Kids Stories & Friends*.
+
+                    **Important:** this tab builds **3D-looking cartoon stills + bounce motion + speak voice**.
+                    It is **not** singing and **not** full continuous CGI movies.
+
+                    Pick a theme (or Custom) → paste **short speak lines** (not “Scene 1 — …” headers)
+                    → **Draft title & script** → **Generate kids video**.
                     """
                 )
                 with gr.Row():
                     with gr.Column(scale=1):
                         kids_theme = gr.Dropdown(
                             choices=KIDS_THEME_CHOICES,
-                            value="Humpty Dumpty",
-                            label="Song theme (CoComelon-style)",
+                            value="New Kid, New Friend",
+                            label="Story theme",
                         )
                         kids_title = gr.Textbox(
-                            label="Song title (optional override / required for Custom)",
+                            label="Story title (optional override / required for Custom)",
                             lines=2,
                             value="",
-                            placeholder="Humpty Dumpty   →   becomes: Humpty Dumpty Song 🥚 | Nursery Rhymes & Kids Songs",
+                            placeholder="New Kid, New Friend   →   becomes: New Kid, New Friend Story 🏫 | Kids Stories & Friends",
                         )
                         kids_script = gr.Textbox(
-                            label="Optional lyrics / story beats (leave empty to auto-write)",
-                            lines=8,
+                            label="Optional speak script (leave empty to auto-write)",
+                            lines=10,
                             placeholder=(
-                                "Leave empty for auto nursery lyrics.\n"
-                                "Or paste your own, e.g.:\n"
-                                "Humpty Dumpty sat on a wall.\n"
-                                "Humpty Dumpty had a great fall.\n"
-                                "…"
+                                "Paste SHORT speak lines (one idea per line).\n"
+                                "Do NOT paste 'Scene 1 — …' headers.\n"
+                                "This is spoken story — not singing.\n\n"
+                                "A new school day!\n"
+                                "A shy child walks in.\n"
+                                "Hello! Hello!\n"
+                                "Come play with us!\n"
+                                "Be kind. Say hello. Make a new friend!"
                             ),
                         )
                         with gr.Row():
@@ -1672,7 +1678,7 @@ def build_ui() -> gr.Blocks:
                             choices=list(KIDS_SPEAK_LANGUAGES.keys()),
                             value=KIDS_DEFAULT_SPEAK,
                             label="Speak language — English (default) or Khmer",
-                            info="Voice speaks lyrics in this language.",
+                            info="Voice speaks the story in this language (not singing).",
                         )
                         kids_voice = gr.Dropdown(
                             choices=list(KIDS_VOICES.keys()),
@@ -1682,8 +1688,8 @@ def build_ui() -> gr.Blocks:
                         kids_image_source = gr.Dropdown(
                             choices=list(KIDS_IMAGE_SOURCES.keys()),
                             value=KIDS_DEFAULT_IMAGE_SOURCE,
-                            label="Image source (for better scene pictures)",
-                            info="Mix = AI cartoon + free stock fallback. Paste your own links below if you have rights.",
+                            label="Image source (AI cartoon = best 3D look)",
+                            info="Use AI cartoon for 3D preschool look. Mix/stock can become photos.",
                         )
                         kids_image_urls = gr.Textbox(
                             label="Optional image links (direct .jpg/.png URLs, one per line)",
@@ -1703,7 +1709,7 @@ def build_ui() -> gr.Blocks:
                             value=False,
                         )
                         kids_captions_en = gr.Checkbox(
-                            label="Show English captions (lyrics)",
+                            label="Show English captions (speak lines)",
                             value=True,
                         )
                         kids_show_note = gr.Checkbox(
@@ -1712,8 +1718,8 @@ def build_ui() -> gr.Blocks:
                         )
                         kids_note = gr.Textbox(
                             label="Video note text",
-                            value="Kids Song",
-                            placeholder="Kids Song",
+                            value="Kids Story",
+                            placeholder="Kids Story",
                         )
                         kids_title_en = gr.Checkbox(
                             label="Show English title (top right)",
@@ -1725,7 +1731,7 @@ def build_ui() -> gr.Blocks:
                         )
                         kids_fast = gr.Checkbox(label="Faster encode", value=True)
 
-                        kids_draft_btn = gr.Button("Draft title & lyrics", variant="secondary")
+                        kids_draft_btn = gr.Button("Draft title & script", variant="secondary")
                         kids_btn = gr.Button("Generate kids video", variant="primary")
 
                         gr.Markdown("### Progress")
@@ -1743,18 +1749,19 @@ def build_ui() -> gr.Blocks:
                     with gr.Column(scale=1):
                         kids_summary = gr.Markdown(
                             value=(
-                                "**Preview:** Click **Draft title & lyrics** to see a "
-                                "CoComelon-style title + sing-along script before generating."
+                                "**Preview:** Click **Draft title & script** to see a "
+                                "spoken story title + speak lines before generating "
+                                "(not singing)."
                             ),
                             label="Result",
                         )
                         kids_title_out = gr.Textbox(
-                            label="Formatted YouTube-style title",
+                            label="Formatted story title",
                             lines=2,
                             interactive=False,
                         )
                         kids_lyrics_out = gr.Textbox(
-                            label="English lyrics / script",
+                            label="English speak script",
                             lines=12,
                             interactive=False,
                         )
@@ -1816,29 +1823,30 @@ def build_ui() -> gr.Blocks:
 
                 gr.Markdown(
                     """
-                    ### Title & script style (follow this pattern)
+                    ### Title & script style (spoken story — not singing)
                     | Piece | Example |
                     |-------|---------|
-                    | Title | `Humpty Dumpty Song 🥚 \\| Nursery Rhymes & Kids Songs` |
-                    | Also | `Bananaphone Song 🍌 \\| Nursery Rhymes & Kids Songs` |
-                    | Also | `Yummy Peas Song 🥦 \\| Fruit & Vegetables for Kids` |
-                    | Script | Short repeating verses + *Wow! Yay!* energy (like Humpty Dumpty) |
+                    | Title | `New Kid, New Friend Story 🏫 \\| Kids Stories & Friends` |
+                    | Also | `Humpty Dumpty Story 🥚 \\| Kids Stories & Friends` |
+                    | Script | Short speak lines only — **not** `Scene 1 — …` headers |
+                    | Voice | Spoken TTS (Jenny) — **not** sing mode |
 
                     ### Quick start
-                    1. Theme: **Humpty Dumpty** (matches the sample link style)
+                    1. Theme: **New Kid, New Friend**
                     2. **Speak:** English · **Speaker:** English — Female (Jenny)
-                    3. **Images:** AI + stock mix (recommended) — or paste your own image URLs
-                    4. Length: **3 minutes** → **Generate kids video**
+                    3. **Images:** **AI cartoon (recommended)**
+                    4. Length: **3 minutes** → **Draft** → **Generate kids video**
 
                     ### Better images — what to use
                     | Source | Use? | Notes |
                     |--------|------|-------|
-                    | **AI cartoon (Pollinations)** | ✅ Recommended | Original nursery scenes, no key needed |
-                    | **Wikimedia Commons** | ✅ Built-in stock fallback | Free educational art |
-                    | **[Pexels](https://www.pexels.com/api/)** | ✅ Best stock quality | Set env `PEXELS_API_KEY` |
-                    | **[Unsplash](https://unsplash.com/developers)** | ✅ | Set env `UNSPLASH_ACCESS_KEY` |
-                    | **Your own CDN / Drive direct links** | ✅ | Paste `.jpg` / `.png` URLs you own |
-                    | Instagram / TikTok / Facebook / YouTube pages | ❌ | Blocked — ToS + copyright; use direct image files only |
+                    | **AI cartoon (Pollinations)** | ✅ Best for 3D kids look | Default now |
+                    | **AI + stock mix** | ⚠️ | May fall back to photos (less cartoon) |
+                    | **Stock photos** | ❌ for 3D kids | Use only if you want real photos |
+                    | **Your own CDN links** | ✅ | Paste `.jpg` / `.png` you own |
+                    | Instagram / TikTok / Facebook / YouTube pages | ❌ | Blocked |
+
+                    Want **singing** instead? Use **Tab 4: Video → Song AI** (upload a song video).
 
                     Optional: `POLLINATIONS_API_KEY` for higher AI image limits ([enter.pollinations.ai](https://enter.pollinations.ai)).
                     Needs internet for images + Edge TTS.

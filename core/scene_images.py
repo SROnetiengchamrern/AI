@@ -98,19 +98,19 @@ def _fallback_gradient(out_path: Path, width: int, height: int, seed: str, style
 
 
 def boost_kids_prompt(prompt: str) -> str:
-    """Stronger preschool cartoon lock so AI images look more nursery-like."""
+    """Stronger preschool 3D CGI lock so AI images look nursery-channel quality."""
     p = re.sub(r"\s+", " ", (prompt or "").strip())
     if not p:
-        p = "happy toddlers singing nursery rhyme"
+        p = "happy toddlers playing at colorful preschool playground"
     lock = (
-        "bright colorful 3D preschool cartoon animation still, cute toddler JJ-style "
-        "big round eyes soft cheeks, soft claymation-like 3D, highly saturated candy colors, "
-        "sunny wholesome nursery rhyme scene, Pixar-like kids film lighting, "
-        "family-friendly, sharp focus, no text, no watermark, no logo, no letters"
+        "polished 3D CGI preschool animation still, soft rounded plastic toy look, "
+        "big expressive eyes, candy saturated colors, sunny soft key light, "
+        "wholesome family-friendly, sharp focus, no photoreal photo, "
+        "no text, no watermark, no logo, no letters"
     )
     # Keep subject first, style second
-    core = p.split(", no text")[0][:220]
-    return f"{core}, {lock}"[:380]
+    core = p.split(", no text")[0].split(", no photoreal")[0][:240]
+    return f"{core}, {lock}"[:420]
 
 
 def stock_search_query(prompt: str, style: str = "kids") -> str:
@@ -172,15 +172,15 @@ def fetch_pollinations_ai(
     urls = [
         (
             f"https://gen.pollinations.ai/image/{encoded}"
-            f"?model=flux&width={width}&height={height}&seed={seed}&nologo=true"
+            f"?model=flux&width={width}&height={height}&seed={seed}&nologo=true&enhance=true"
         ),
         (
             f"https://image.pollinations.ai/prompt/{encoded}"
-            f"?width={width}&height={height}&seed={seed}&nologo=true&enhance=false&model=flux"
+            f"?width={width}&height={height}&seed={seed}&nologo=true&enhance=true&model=flux"
         ),
-        # Second seed / slight enhance for kids only
+        # Retry with shorter prompt + new seed
         (
-            f"https://image.pollinations.ai/prompt/{urllib.parse.quote(prompt_use[:280])}"
+            f"https://image.pollinations.ai/prompt/{urllib.parse.quote(prompt_use[:300])}"
             f"?width={width}&height={height}&seed={seed + 17}&nologo=true&enhance=true&model=flux"
         ),
     ]
@@ -382,8 +382,8 @@ def fetch_scene_image(
         ):
             return out_path
 
-    # 3) Stock path
-    if src in ("stock", "mix", "ai"):
+    # 3) Stock path (skip for kids AI — photo stock breaks 3D cartoon look)
+    if src in ("stock", "mix", "ai") and not (style == "kids" and src == "ai"):
         # Prefer Pexels/Unsplash when keys exist, then Wikimedia
         if fetch_pexels(query, out_path, width=width, height=height, seed=base_seed, timeout=45):
             return out_path
@@ -391,8 +391,8 @@ def fetch_scene_image(
             return out_path
         if fetch_wikimedia(query, out_path, width=width, height=height, seed=base_seed, timeout=45):
             return out_path
-        # Broader Commons query for kids
-        if style == "kids" and fetch_wikimedia(
+        # Broader Commons query for kids mix/stock only
+        if style == "kids" and src != "ai" and fetch_wikimedia(
             "children cartoon illustration nursery",
             out_path,
             width=width,
@@ -404,12 +404,12 @@ def fetch_scene_image(
 
     # 4) Last AI retry with boosted kids prompt
     if src != "stock" and fetch_pollinations_ai(
-        boost_kids_prompt(prompt),
+        boost_kids_prompt(prompt) if style == "kids" else prompt,
         out_path,
         width=width,
         height=height,
         seed=base_seed + 99,
-        style="kids",
+        style="kids" if style == "kids" else style,
         timeout=timeout,
     ):
         return out_path

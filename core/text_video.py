@@ -830,9 +830,9 @@ def _style_suffix(style: str) -> str:
         "nature": "nature wildlife photography, golden hour, serene",
         "modern": "modern cinematic color grade, clean aesthetic",
         "kids": (
-            "bright colorful 3D preschool cartoon, cute toddler with big friendly eyes, "
-            "soft rounded shapes, highly saturated happy colors, sunny wholesome lighting, "
-            "nursery rhyme animation still"
+            "polished 3D CGI preschool animation still, soft rounded plastic toy look, "
+            "big expressive eyes, candy saturated colors, sunny soft key light, "
+            "wholesome YouTube kids nursery quality, no photoreal photo"
         ),
         "match": "",  # visual prompt already has full style
     }
@@ -1867,6 +1867,15 @@ def _subject_motion_vf(kind: str, width: int, height: int, frames: int) -> str:
             f"y='ih/2-(ih/zoom/2)+12*cos(on/55)':"
             f"d={frames}:s={width}x{height}:fps=24"
         )
+    elif kind == "kids":
+        # Bouncy nursery push-in + light sway (still → feels more 3D animated)
+        zp = (
+            f"zoompan=z='min(1.10+on*0.00055,1.28)':"
+            f"x='iw/2-(iw/zoom/2)+28*sin(on/22)':"
+            f"y='ih/2-(ih/zoom/2)+18*sin(on/16)':"
+            f"d={frames}:s={width}x{height}:fps=24,"
+            f"eq=saturation=1.18:contrast=1.06:brightness=0.02"
+        )
     else:
         zp = (
             f"zoompan=z='min(1.04+on*0.00032,1.12)':"
@@ -2137,6 +2146,7 @@ def create_video_from_text(
     height: int = 720,
     fast: bool = True,
     progress_cb=None,
+    scene_specs: list[SceneSpec] | None = None,
 ) -> TextVideoResult:
     """
     text/title → AI images + AI voice → MP4.
@@ -2178,15 +2188,20 @@ def create_video_from_text(
     effective_captions_en = bool(show_captions_en)
     effective_note = (video_note or "").strip() if show_note else ""
 
-    khmer, specs, resolved = build_scene_specs(
-        text,
-        mode=mode,
-        source_language=source_language,
-        style=use_style if use_style != "match" else style,
-        video_title=title,
-        target_seconds=target_sec,
-        speak_language=speak_lang,
-    )
+    if scene_specs:
+        specs = [s for s in scene_specs if (s.speak_text or s.image_prompt)]
+        khmer = text
+        resolved = "kids" if style == "kids" else "script"
+    else:
+        khmer, specs, resolved = build_scene_specs(
+            text,
+            mode=mode,
+            source_language=source_language,
+            style=use_style if use_style != "match" else style,
+            video_title=title,
+            target_seconds=target_sec,
+            speak_language=speak_lang,
+        )
     if not specs:
         raise ValueError("No usable scenes from this text.")
 
@@ -2215,8 +2230,12 @@ def create_video_from_text(
         else:
             title_kh = _video_title_kh(text, khmer_fallback=khmer)
 
-    # Even scene holds so joined video ≈ target length (title mode)
-    scene_hold = max(3.0, target_sec / max(1, len(specs))) if resolved == "title" else None
+    # Even scene holds so joined video ≈ target length (title / kids storyboard)
+    scene_hold = (
+        max(3.0, target_sec / max(1, len(specs)))
+        if resolved in ("title", "kids")
+        else None
+    )
 
     seed_src = title or text
     root = Path(output_dir) if output_dir else preferred_temp_root() / "text_video"
@@ -2271,7 +2290,10 @@ def create_video_from_text(
         clip = scenes_dir / f"clip_{i:03d}.mp4"
         cap_kh = spec.caption if effective_captions_kh else ""
         cap_en = spec.caption_en if effective_captions_en else ""
-        motion_kind = detect_motion_kind(f"{seed_src} {spec.image_prompt} {spec.speak_text}")
+        if style == "kids" or use_style == "kids":
+            motion_kind = "kids"
+        else:
+            motion_kind = detect_motion_kind(f"{seed_src} {spec.image_prompt} {spec.speak_text}")
         _make_scene_clip(
             jpg,
             mp3,
