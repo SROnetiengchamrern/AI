@@ -1050,7 +1050,7 @@ def _render_latin_badge(text: str, *, width: int) -> Image.Image:
 
     fonts_dir = ensure_battambang_fonts()
     font_path = fonts_dir / "Battambang-Bold.ttf"
-    font_size = max(17, width // 48)
+    font_size = max(22, width // 36)
     try:
         font = ImageFont.truetype(str(font_path), font_size)
     except Exception:
@@ -1069,10 +1069,18 @@ def _render_latin_badge(text: str, *, width: int) -> Image.Image:
         [0, 0, box_w, box_h],
         radius=6,
         fill=(20, 20, 24, 175),
-        outline=(255, 255, 255, 90),
-        width=1,
+        outline=(255, 255, 255, 220),
+        width=2,
     )
-    draw.text((box_w // 2, box_h // 2), text, font=font, fill=(255, 255, 255, 255), anchor="mm")
+    draw.text(
+        (box_w // 2, box_h // 2),
+        text,
+        font=font,
+        fill=(220, 30, 30, 255),
+        stroke_width=2,
+        stroke_fill=(255, 255, 255, 255),
+        anchor="mm",
+    )
     return badge
 
 
@@ -1084,10 +1092,12 @@ def _render_khmer_badge(text: str, *, width: int) -> Image.Image:
 
     text_img = render_khmer_line(
         text,
-        font_size=max(18, width // 50),
+        font_size=max(22, width // 36),
         max_width=int(width * 0.42),
         max_lines=1,
         prefer_two_lines=False,
+        fill=(220, 30, 30, 255),
+        stroke=(255, 255, 255, 255),
         stroke_width=2,
     )
     pad = 10
@@ -1097,8 +1107,8 @@ def _render_khmer_badge(text: str, *, width: int) -> Image.Image:
         [0, 0, badge.width, badge.height],
         radius=6,
         fill=(20, 20, 24, 175),
-        outline=(255, 255, 255, 90),
-        width=1,
+        outline=(255, 255, 255, 220),
+        width=2,
     )
     badge.alpha_composite(text_img, (pad, pad))
     return badge
@@ -1326,14 +1336,14 @@ def _wrap_english_display_lines(
 
 
 def _render_english_caption(text: str, *, width: int) -> Image.Image:
-    """Render 1–2 lines of English caption text (white + black stroke)."""
+    """Render 1–2 lines of English caption text (red + white border)."""
     text = re.sub(r"\s+", " ", (text or "").strip())
     if not text:
         return Image.new("RGBA", (1, 1), (0, 0, 0, 0))
 
-    font_size = max(22, width // 34)
+    font_size = max(34, width // 24)
     font = _latin_caption_font(font_size, bold=True)
-    stroke = 2
+    stroke = 3
     pad = stroke + 3
     max_width = int(width * 0.82)
 
@@ -1372,9 +1382,9 @@ def _render_english_caption(text: str, *, width: int) -> Image.Image:
             (x, draw_y),
             line,
             font=font,
-            fill=(255, 255, 255, 255),
+            fill=(220, 30, 30, 255),
             stroke_width=stroke,
-            stroke_fill=(0, 0, 0, 255),
+            stroke_fill=(255, 255, 255, 255),
         )
         y += lh + gap
     return canvas
@@ -1806,11 +1816,13 @@ def _caption_overlay_layer(
     if caption_kh:
         kh_img = render_khmer_line(
             caption_kh,
-            font_size=max(22, width // 36),
+            font_size=max(34, width // 24),
             max_width=int(width * 0.82),
             max_lines=2,
             prefer_two_lines=True,
-            stroke_width=2,
+            fill=(220, 30, 30, 255),
+            stroke=(255, 255, 255, 255),
+            stroke_width=3,
         )
         max_cap_w = int(width * 0.92)
         if kh_img.width > max_cap_w:

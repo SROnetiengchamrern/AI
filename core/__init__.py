@@ -32,6 +32,7 @@ SOURCE_LANGUAGES = {
 }
 
 KHMER_VOICES = {
+    "Auto (match video gender)": "auto",
     "Female (Sreymom)": "km-KH-SreymomNeural",
     "Male (Piseth)": "km-KH-PisethNeural",
 }

@@ -41,6 +41,8 @@ class PipelineResult:
     music_path: Path | None
     output_video: Path | None
     work_dir: Path
+    voice_used: str | None = None
+    detected_gender: str | None = None
 
 
 def convert_video_to_khmer(
@@ -49,7 +51,7 @@ def convert_video_to_khmer(
     source_language: str = "auto",
     model_size: str = "base",
     mode: str = "dub_subs",
-    voice_label: str = "Female (Sreymom)",
+    voice_label: str = "Auto (match video gender)",
     generate_story: bool = False,
     add_music: bool = False,
     keep_original_music: bool = True,
@@ -117,11 +119,22 @@ def convert_video_to_khmer(
         )
 
     tick(f"Detected language: {transcript.language} — translating to Khmer…", 0.45)
+    n_lines = len(transcript.segments)
+    if n_lines > 40:
+        tick(
+            f"Long video (~{n_lines} lines) — translating (progress will move)…",
+            0.45,
+        )
+
     khmer_segments: list[Segment] = translate_transcript(
         transcript,
-        source=source_language,
+        source=source_language if source_language != "auto" else transcript.language,
         fast=fast,
+        progress_cb=progress_cb,
+        progress_start=0.45,
+        progress_end=0.62,
     )
+    tick(f"Translated {len(khmer_segments)} lines — preparing voice/subs…", 0.62)
     # Clean + merge nearby lines for stable voice on long videos; split captions separately
     speak_segments = [
         Segment(s.start, s.end, clean_khmer_text(s.text))
@@ -167,6 +180,8 @@ def convert_video_to_khmer(
     output_video: Path | None = None
     duration = get_duration_seconds(video_path)
     dub_mode = mode in ("dub", "dub_subs")
+    voice_label_resolved: str | None = (voice_label or "").strip() or None
+    detected_gender: str | None = None
 
     # Dub modes strip original audio — keep the video's music under Khmer by default
     if keep_original_music and dub_mode:
@@ -208,8 +223,20 @@ def convert_video_to_khmer(
             mixed = work / f"{stem}_khmer_subs_music.mp4"
             output_video = mix_into_video(output_video, music_path, mixed)
     elif dub_mode:
+        from .voice_gender import resolve_khmer_voice_for_audio
+
+        tick("Matching Khmer voice to speaker gender…", 0.70)
+        voice_label_resolved, detected_gender = resolve_khmer_voice_for_audio(
+            voice_label,
+            wav,
+        )
+        if detected_gender:
+            tick(
+                f"Detected {detected_gender} voice in video → {voice_label_resolved}",
+                0.71,
+            )
         tick("Generating timed Khmer voice…", 0.72)
-        voice = resolve_voice(voice_label)
+        voice = resolve_voice(voice_label_resolved)
         narration, spoken_segments = synthesize_segments(
             speak_segments,
             voice,
@@ -290,4 +317,6 @@ def convert_video_to_khmer(
         music_path=music_path,
         output_video=output_video,
         work_dir=work,
+        voice_used=voice_label_resolved if dub_mode else None,
+        detected_gender=detected_gender if dub_mode else None,
     )

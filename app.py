@@ -235,11 +235,25 @@ def _fail_convert(exc) -> tuple:
     Must return exactly 10 values matching run_btn.click outputs.
     """
     msg = str(exc)
+    low = msg.lower()
+    tip = (
+        "Rename long titles (especially with `/` or `|`) to a short name like "
+        "`video.mkv`, then upload again."
+    )
+    if "translation" in low or "too many requests" in low or "rate limit" in low:
+        tip = (
+            "Google free translate is rate-limited. Wait 1–2 minutes and retry. "
+            "For long videos, use shorter clips or Faster encode OFF."
+        )
+    elif "no speech" in low:
+        tip = "Check the video has spoken audio (not music-only). Set Source language manually."
+    elif "path" in low or "not found" in low:
+        tip = "Rename the upload to a short name like `video.mkv` and upload again."
+
     summary = (
         f"**Status:** Conversion failed\n\n"
         f"**Error:** {msg}\n\n"
-        f"_Tip:_ Rename long titles (especially with `/` or `|`) to a short name like "
-        f"`video.mkv`, then upload again. Keep the tab open and check internet for TTS._"
+        f"_Tip:_ {tip} Keep the tab open and check internet._"
     )
     return (
         _loading_html(False, 0, f"Error: {msg}"),
@@ -400,10 +414,13 @@ def process(
                 )
             elif "no speech" in low:
                 msg = str(exc)
-            elif "translation" in low or "translator" in low:
+            elif "translation" in low or "translator" in low or "too many requests" in low:
                 msg = (
-                    "Translation to Khmer failed (Google Translate). "
-                    "Check internet, set Source language to Auto detect or English, then retry. "
+                    "Translation to Khmer failed (Google Translate rate limit / network).\n\n"
+                    "• Wait 1–2 minutes, then retry\n"
+                    "• Set Source language to Auto detect or English\n"
+                    "• Short videos: retry once after waiting\n"
+                    "• Long videos: turn Faster encode OFF, or split into shorter clips\n"
                     f"Detail: {exc}"
                 )
             q.put(("error", RuntimeError(msg), None))
@@ -439,6 +456,17 @@ def process(
             summary = (
                 f"**Status:** Conversion complete{extra_line}\n\n"
                 f"**Detected language:** `{result.detected_language}`\n\n"
+            )
+            if getattr(result, "voice_used", None):
+                gender = getattr(result, "detected_gender", None)
+                if gender:
+                    summary += (
+                        f"**Voice match:** video sounded **{gender}** → "
+                        f"**{result.voice_used}**\n\n"
+                    )
+                else:
+                    summary += f"**Khmer voice:** `{result.voice_used}`\n\n"
+            summary += (
                 f"**Original transcript**\n\n{orig_preview}\n\n"
                 f"**{body_label}**\n\n{khmer_preview}\n\n"
             )
@@ -1310,8 +1338,9 @@ def build_ui() -> gr.Blocks:
                         )
                         voice = gr.Dropdown(
                             choices=list(KHMER_VOICES.keys()),
-                            value="Female (Sreymom)",
+                            value="Auto (match video gender)",
                             label="Khmer TTS voice (for dub mode)",
+                            info="Auto = male video → Male (Piseth), female video → Female (Sreymom)",
                         )
 
                         gr.Markdown("### Extra options")
@@ -1440,6 +1469,7 @@ def build_ui() -> gr.Blocks:
                     """
                     ### Tips (Video → Khmer)
                     - **Copyright:** only convert videos you own or are licensed to use. This app cannot “fix” copyright.
+                    - **Voice Auto (match video gender):** male speech → **Male (Piseth)**; female speech → **Female (Sreymom)**. Or pick Male/Female manually.
                     - To reduce **music** claims: turn **Keep original music OFF**, enable **soft procedural BGM** (picture can still be claimed).
                     - **Keep original music** (default ON): Khmer voice + soundtrack from your upload.
                     - Whisper **Base** = better text. Keep a stable internet for Edge TTS.

@@ -629,7 +629,7 @@ def burn_khmer_overlays(
             seg.text,
             png,
             video_width=width,
-            font_size=max(24, width // 34),
+            font_size=max(36, width // 24),
             max_lines=2,
         )
         png_paths.append(png)
@@ -845,10 +845,12 @@ def _render_note_badge(text: str, *, video_width: int) -> "Image.Image":
     if re.search(r"[\u1780-\u17FF]", text):
         text_img = render_khmer_line(
             text,
-            font_size=max(18, video_width // 50),
+            font_size=max(22, video_width // 36),
             max_width=int(video_width * 0.42),
             max_lines=1,
             prefer_two_lines=False,
+            fill=(220, 30, 30, 255),
+            stroke=(255, 255, 255, 255),
             stroke_width=2,
         )
         pad = 10
@@ -862,15 +864,15 @@ def _render_note_badge(text: str, *, video_width: int) -> "Image.Image":
             [0, 0, badge.width, badge.height],
             radius=6,
             fill=(20, 20, 24, 175),
-            outline=(255, 255, 255, 90),
-            width=1,
+            outline=(255, 255, 255, 220),
+            width=2,
         )
         badge.alpha_composite(text_img, (pad, pad))
         return badge
 
     fonts_dir = ensure_battambang_fonts()
     font_path = fonts_dir / "Battambang-Bold.ttf"
-    font_size = max(17, video_width // 48)
+    font_size = max(22, video_width // 36)
     try:
         font = ImageFont.truetype(str(font_path), font_size)
     except Exception:
@@ -889,14 +891,16 @@ def _render_note_badge(text: str, *, video_width: int) -> "Image.Image":
         [0, 0, box_w, box_h],
         radius=6,
         fill=(20, 20, 24, 175),
-        outline=(255, 255, 255, 90),
-        width=1,
+        outline=(255, 255, 255, 220),
+        width=2,
     )
     draw.text(
         (box_w // 2, box_h // 2),
         text,
         font=font,
-        fill=(255, 255, 255, 255),
+        fill=(220, 30, 30, 255),
+        stroke_width=2,
+        stroke_fill=(255, 255, 255, 255),
         anchor="mm",
     )
     return badge
@@ -1027,8 +1031,12 @@ def overlay_video_note(
 def resolve_voice(label: str) -> str:
     """Map UI voice label → Edge TTS voice id (Khmer + common EN/kids labels)."""
     from . import KHMER_VOICES
+    from .voice_gender import VOICE_AUTO, VOICE_FEMALE, is_auto_voice
 
-    if label in KHMER_VOICES:
+    if is_auto_voice(label):
+        # Auto must be resolved earlier with audio; safe default = female
+        return KHMER_VOICES[VOICE_FEMALE]
+    if label in KHMER_VOICES and KHMER_VOICES[label] != "auto":
         return KHMER_VOICES[label]
     # Already a Neural voice id
     if isinstance(label, str) and "Neural" in label:
@@ -1043,5 +1051,6 @@ def resolve_voice(label: str) -> str:
         "Khmer — Male (Piseth)": "km-KH-PisethNeural",
         "Female (Sreymom)": "km-KH-SreymomNeural",
         "Male (Piseth)": "km-KH-PisethNeural",
+        VOICE_AUTO: "km-KH-SreymomNeural",
     }
     return extras.get(label, label)

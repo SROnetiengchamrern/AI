@@ -35,13 +35,13 @@ def _shape(text: str, font_path: Path, font_size: int):
 def render_khmer_line(
     text: str,
     *,
-    font_size: int = 42,
+    font_size: int = 52,
     max_width: int = 1000,
     max_lines: int = 2,
     prefer_two_lines: bool = True,
-    fill=(255, 255, 255, 255),
-    stroke=(0, 0, 0, 255),
-    stroke_width: int = 2,
+    fill=(220, 30, 30, 255),  # red text
+    stroke=(255, 255, 255, 255),  # white border
+    stroke_width: int = 3,
     bold: bool = True,
 ) -> Image.Image:
     """
@@ -377,7 +377,7 @@ def save_subtitle_png(
     out_path = Path(out_path)
     out_path.parent.mkdir(parents=True, exist_ok=True)
     if font_size is None:
-        font_size = max(26, video_width // 34)
+        font_size = max(36, video_width // 24)
     max_width = int(video_width * 0.82)
     img = render_khmer_line(
         text,
@@ -385,7 +385,9 @@ def save_subtitle_png(
         max_width=max_width,
         max_lines=max_lines,
         prefer_two_lines=True,
-        stroke_width=2,
+        fill=(220, 30, 30, 255),
+        stroke=(255, 255, 255, 255),
+        stroke_width=3,
     )
     # Never wider than the video frame
     max_cap_w = int(video_width * 0.92)
