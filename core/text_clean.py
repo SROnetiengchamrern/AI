@@ -4,6 +4,8 @@ from __future__ import annotations
 
 import re
 
+from .khmer_numbers import apply_khmer_digits_in_text, expand_numbers_for_speak
+
 
 _EN_PAREN = re.compile(r"\([^)]*[A-Za-z][^)]*\)")
 _BARE_ENGLISH = re.compile(r"\b[A-Za-z]{2,}(?:'[A-Za-z]+)?\b")
@@ -26,6 +28,7 @@ def clean_khmer_text(text: str) -> str:
     """
     Clean Khmer for TTS + on-screen captions.
     Removes leftover English words/parentheticals and normalizes punctuation.
+    Converts Western digits (0-9) → Khmer digits (០-៩) for on-screen text.
     """
     t = (text or "").strip()
     t = _EN_PAREN.sub(" ", t)
@@ -36,6 +39,8 @@ def clean_khmer_text(text: str) -> str:
     t = re.sub(r"\s*។\s*", "។ ", t)
     t = _MULTI_SPACE.sub(" ", t).strip()
     t = t.strip(" |/-")
+    # Video numbers → Khmer digits on captions (១២៣ …)
+    t = apply_khmer_digits_in_text(t)
     # Ensure sentence ends cleanly for TTS
     if t and not re.search(r"[។!?]$", t):
         t += "។"
@@ -43,8 +48,14 @@ def clean_khmer_text(text: str) -> str:
 
 
 def prepare_speak_text(text: str) -> str:
-    """Short pause-friendly text for Edge TTS (Khmer)."""
+    """
+    Short pause-friendly text for Edge TTS (Khmer).
+    Numbers are spoken as Khmer words (មួយរយ…) per place-value chart,
+    while captions keep Khmer digits via clean_khmer_text.
+    """
     t = clean_khmer_text(text)
+    # Speak: ១២៣ / 123 → មួយរយម្ភៃបី (clearer than digit glyphs)
+    t = expand_numbers_for_speak(t)
     # Edge TTS reads better with a space after Khmer stop
     t = re.sub(r"។+", "។ ", t)
     return _MULTI_SPACE.sub(" ", t).strip()

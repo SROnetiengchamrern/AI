@@ -461,8 +461,8 @@ def process(
                 gender = getattr(result, "detected_gender", None)
                 if gender:
                     summary += (
-                        f"**Voice match:** video sounded **{gender}** → "
-                        f"**{result.voice_used}**\n\n"
+                        f"**Voice match:** people sounded like **{gender}** → "
+                        f"**{result.voice_used}** (clear speak)\n\n"
                     )
                 else:
                     summary += f"**Khmer voice:** `{result.voice_used}`\n\n"
@@ -1340,7 +1340,12 @@ def build_ui() -> gr.Blocks:
                             choices=list(KHMER_VOICES.keys()),
                             value="Auto (match video gender)",
                             label="Khmer TTS voice (for dub mode)",
-                            info="Auto = male video → Male (Piseth), female video → Female (Sreymom)",
+                            info=(
+                                "Auto matches people in video (baby / girl / boy·son / "
+                                "woman·mother / man·father) → clear Khmer speak "
+                                "(Sreymom or Piseth + slower clearer rate). "
+                                "Or force Male / Female manually."
+                            ),
                         )
 
                         gr.Markdown("### Extra options")
@@ -1469,7 +1474,8 @@ def build_ui() -> gr.Blocks:
                     """
                     ### Tips (Video → Khmer)
                     - **Copyright:** only convert videos you own or are licensed to use. This app cannot “fix” copyright.
-                    - **Voice Auto (match video gender):** male speech → **Male (Piseth)**; female speech → **Female (Sreymom)**. Or pick Male/Female manually.
+                    - **Voice Auto:** detects **baby / girl / boy·son / woman·mother / man·father** in the video and speaks clear Khmer (**Sreymom** or **Piseth**, slower + pitch tuned). If wrong once, pick Male/Female manually.
+                    - **Numbers:** Western digits in the video (`123`) become **Khmer digits on screen** (`១២៣`) and are **spoken as Khmer words** (មួយរយម្ភៃបី — រាយ/ដប់/រយ/ពាន់/ម៉ឺន/សែន/លាន).
                     - To reduce **music** claims: turn **Keep original music OFF**, enable **soft procedural BGM** (picture can still be claimed).
                     - **Keep original music** (default ON): Khmer voice + soundtrack from your upload.
                     - Whisper **Base** = better text. Keep a stable internet for Edge TTS.

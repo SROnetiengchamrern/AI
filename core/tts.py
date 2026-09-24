@@ -25,9 +25,16 @@ def _prep_for_tts(text: str, voice: str = "") -> str:
     return prepare_speak_text(t)
 
 
-async def _synthesize(text: str, voice: str, out_path: Path, *, rate: str = "-5%") -> None:
-    # Slightly slower = clearer Khmer pronunciation
-    communicate = edge_tts.Communicate(text, voice, rate=rate)
+async def _synthesize(
+    text: str,
+    voice: str,
+    out_path: Path,
+    *,
+    rate: str = "-8%",
+    pitch: str = "+0Hz",
+) -> None:
+    # Slightly slower = clearer Khmer; pitch tuned for baby/girl/boy/adult
+    communicate = edge_tts.Communicate(text, voice, rate=rate, pitch=pitch)
     await communicate.save(str(out_path))
 
 
@@ -36,13 +43,14 @@ async def _synthesize_with_retry(
     voice: str,
     out_path: Path,
     *,
-    rate: str = "-5%",
+    rate: str = "-8%",
+    pitch: str = "+0Hz",
     attempts: int = 5,
 ) -> None:
     last_exc: Exception | None = None
     for i in range(attempts):
         try:
-            await _synthesize(text, voice, out_path, rate=rate)
+            await _synthesize(text, voice, out_path, rate=rate, pitch=pitch)
             if _tts_clip_ok(out_path):
                 return
             raise RuntimeError("TTS wrote empty or too-short audio")
@@ -73,14 +81,17 @@ def text_to_speech(
     voice: str,
     out_path: str | Path,
     *,
-    rate: str = "-5%",
+    rate: str = "-8%",
+    pitch: str = "+0Hz",
 ) -> Path:
     out_path = Path(out_path)
     out_path.parent.mkdir(parents=True, exist_ok=True)
     speak = _prep_for_tts(text, voice)
     if not speak:
         raise ValueError("No text to synthesize")
-    asyncio.run(_synthesize_with_retry(speak, voice, out_path, rate=rate))
+    asyncio.run(
+        _synthesize_with_retry(speak, voice, out_path, rate=rate, pitch=pitch)
+    )
     return out_path
 
 
@@ -88,7 +99,8 @@ async def _synthesize_many(
     items: list[tuple[str, Path]],
     voice: str,
     *,
-    rate: str = "-5%",
+    rate: str = "-8%",
+    pitch: str = "+0Hz",
     prep=None,
 ) -> list[Path]:
     """
@@ -101,7 +113,7 @@ async def _synthesize_many(
         speak = prep_fn(text)
         if not speak:
             return
-        await _synthesize_with_retry(speak, voice, path, rate=rate)
+        await _synthesize_with_retry(speak, voice, path, rate=rate, pitch=pitch)
 
     sem = asyncio.Semaphore(2)
     failed: list[tuple[str, Path]] = []
@@ -141,7 +153,9 @@ async def _synthesize_many(
             await asyncio.sleep(1.5)
             speak = prep_fn(text)
             if speak:
-                await _synthesize_with_retry(speak, voice, path, rate=rate, attempts=4)
+                await _synthesize_with_retry(
+                    speak, voice, path, rate=rate, pitch=pitch, attempts=4
+                )
         except Exception:
             last_bad.append((text, path))
 
@@ -300,6 +314,9 @@ def build_timed_khmer_track(
     voice: str,
     work_dir: str | Path,
     video_duration: float,
+    *,
+    rate: str = "-8%",
+    pitch: str = "+0Hz",
 ) -> tuple[Path, list[Segment]]:
     """
     Timed Khmer narration for long videos.
@@ -320,7 +337,7 @@ def build_timed_khmer_track(
     jobs: list[tuple[str, Path]] = []
     for i, seg in enumerate(usable):
         jobs.append((prepare_speak_text(seg.text), clips_dir / f"seg_{i:04d}.mp3"))
-    asyncio.run(_synthesize_many(jobs, voice, rate="-5%"))
+    asyncio.run(_synthesize_many(jobs, voice, rate=rate, pitch=pitch))
 
     placed: list[tuple[Path, float, str]] = []
     missing = 0
@@ -389,6 +406,8 @@ def synthesize_segments(
     video_duration: float | None = None,
     *,
     fast: bool = True,
+    rate: str = "-8%",
+    pitch: str = "+0Hz",
 ) -> tuple[Path, list[Segment]]:
     """
     Generate Khmer voice track.
@@ -401,10 +420,18 @@ def synthesize_segments(
         raise ValueError("No Khmer text available for TTS")
 
     if video_duration and video_duration > 0:
-        return build_timed_khmer_track(usable, voice, work_dir, video_duration)
+        return build_timed_khmer_track(
+            usable, voice, work_dir, video_duration, rate=rate, pitch=pitch
+        )
 
     full_text = "។ ".join(prepare_speak_text(s.text) for s in usable)
-    out = text_to_speech(full_text, voice, work_dir / "khmer_narration.mp3", rate="-8%")
+    out = text_to_speech(
+        full_text,
+        voice,
+        work_dir / "khmer_narration.mp3",
+        rate=rate,
+        pitch=pitch,
+    )
     audio_dur = max(1.0, get_duration_seconds(out))
     # Spread original cues across the continuous narration
     span = max(s.end for s in usable) - min(s.start for s in usable)

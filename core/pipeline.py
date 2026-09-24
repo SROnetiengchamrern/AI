@@ -223,19 +223,18 @@ def convert_video_to_khmer(
             mixed = work / f"{stem}_khmer_subs_music.mp4"
             output_video = mix_into_video(output_video, music_path, mixed)
     elif dub_mode:
-        from .voice_gender import resolve_khmer_voice_for_audio
+        from .voice_gender import resolve_speak_profile
 
-        tick("Matching Khmer voice to speaker gender…", 0.70)
-        voice_label_resolved, detected_gender = resolve_khmer_voice_for_audio(
-            voice_label,
-            wav,
-        )
+        tick("Matching Khmer voice to people in video…", 0.70)
+        speak_profile, detected_gender = resolve_speak_profile(voice_label, wav)
+        voice_label_resolved = speak_profile.voice_label
         if detected_gender:
             tick(
-                f"Detected {detected_gender} voice in video → {voice_label_resolved}",
+                f"Detected {detected_gender} in video → "
+                f"{voice_label_resolved} (clear speak)",
                 0.71,
             )
-        tick("Generating timed Khmer voice…", 0.72)
+        tick("Generating clear timed Khmer voice…", 0.72)
         voice = resolve_voice(voice_label_resolved)
         narration, spoken_segments = synthesize_segments(
             speak_segments,
@@ -243,6 +242,8 @@ def convert_video_to_khmer(
             work,
             video_duration=duration,
             fast=fast,
+            rate=speak_profile.rate,
+            pitch=speak_profile.pitch,
         )
         # Captions must use the same windows as the spoken audio
         overlay_srt_segments = split_into_two_line_cues(spoken_segments, max_chars=80)
