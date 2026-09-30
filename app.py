@@ -461,7 +461,7 @@ def process(
                 gender = getattr(result, "detected_gender", None)
                 if gender:
                     summary += (
-                        f"**Voice match:** people sounded like **{gender}** → "
+                        f"**Voice recommend:** people sounded like **{gender}** → "
                         f"**{result.voice_used}** (clear speak)\n\n"
                     )
                 else:
@@ -1336,16 +1336,33 @@ def build_ui() -> gr.Blocks:
                             value="Base (recommended quality)",
                             label="Whisper model size",
                         )
+                        gr.Markdown(
+                            """
+                            **Voice recommend** (pick one):
+                            | People in video | Speak |
+                            |-----------------|--------|
+                            | **Auto ★** (best) | match father / mother / young / boy / girl / baby |
+                            | Father / man | **Male (Piseth)** |
+                            | Mother / woman | **Female (Sreymom)** |
+                            | Young man / boy / son | **Piseth** (young clear) |
+                            | Young woman / girl / daughter | **Sreymom** (young clear) |
+                            | Baby | **Sreymom** (slow + soft) |
+                            """
+                        )
                         voice = gr.Dropdown(
-                            choices=list(KHMER_VOICES.keys()),
-                            value="Auto (match video gender)",
-                            label="Khmer TTS voice (for dub mode)",
-                            info=(
-                                "Auto matches people in video (baby / girl / boy·son / "
-                                "woman·mother / man·father) → clear Khmer speak "
-                                "(Sreymom or Piseth + slower clearer rate). "
-                                "Or force Male / Female manually."
-                            ),
+                            choices=[
+                                "Auto ★ recommended (match people)",
+                                "Father / Man (Piseth)",
+                                "Mother / Woman (Sreymom)",
+                                "Young man (Piseth)",
+                                "Young woman (Sreymom)",
+                                "Young boy / Son (Piseth)",
+                                "Young girl / Daughter (Sreymom)",
+                                "Baby (Sreymom)",
+                            ],
+                            value="Auto ★ recommended (match people)",
+                            label="Khmer speak voice",
+                            info="Recommended: keep Auto. Or pick Father / Mother / Young / Baby manually.",
                         )
 
                         gr.Markdown("### Extra options")
@@ -1474,7 +1491,7 @@ def build_ui() -> gr.Blocks:
                     """
                     ### Tips (Video → Khmer)
                     - **Copyright:** only convert videos you own or are licensed to use. This app cannot “fix” copyright.
-                    - **Voice Auto:** detects **baby / girl / boy·son / woman·mother / man·father** in the video and speaks clear Khmer (**Sreymom** or **Piseth**, slower + pitch tuned). If wrong once, pick Male/Female manually.
+                    - **Voice (recommended):** keep **Auto ★ recommended**. Or pick Father / Mother / Young / Baby from the table above the dropdown.
                     - **Numbers:** Western digits in the video (`123`) become **Khmer digits on screen** (`១២៣`) and are **spoken as Khmer words** (មួយរយម្ភៃបី — រាយ/ដប់/រយ/ពាន់/ម៉ឺន/សែន/លាន).
                     - To reduce **music** claims: turn **Keep original music OFF**, enable **soft procedural BGM** (picture can still be claimed).
                     - **Keep original music** (default ON): Khmer voice + soundtrack from your upload.

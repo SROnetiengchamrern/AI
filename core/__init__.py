@@ -32,9 +32,18 @@ SOURCE_LANGUAGES = {
 }
 
 KHMER_VOICES = {
-    "Auto (match video gender)": "auto",
+    "Auto ★ recommended (match people)": "auto",
+    "Father / Man (Piseth)": "km-KH-PisethNeural",
+    "Mother / Woman (Sreymom)": "km-KH-SreymomNeural",
+    "Young man (Piseth)": "km-KH-PisethNeural",
+    "Young woman (Sreymom)": "km-KH-SreymomNeural",
+    "Young boy / Son (Piseth)": "km-KH-PisethNeural",
+    "Young girl / Daughter (Sreymom)": "km-KH-SreymomNeural",
+    "Baby (Sreymom)": "km-KH-SreymomNeural",
+    # Legacy short labels (still work)
     "Female (Sreymom)": "km-KH-SreymomNeural",
     "Male (Piseth)": "km-KH-PisethNeural",
+    "Auto (match video gender)": "auto",
 }
 
 TARGET_LANG = "km"

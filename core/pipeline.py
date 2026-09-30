@@ -51,7 +51,7 @@ def convert_video_to_khmer(
     source_language: str = "auto",
     model_size: str = "base",
     mode: str = "dub_subs",
-    voice_label: str = "Auto (match video gender)",
+    voice_label: str = "Auto ★ recommended (match people)",
     generate_story: bool = False,
     add_music: bool = False,
     keep_original_music: bool = True,
@@ -230,10 +230,12 @@ def convert_video_to_khmer(
         voice_label_resolved = speak_profile.voice_label
         if detected_gender:
             tick(
-                f"Detected {detected_gender} in video → "
-                f"{voice_label_resolved} (clear speak)",
+                f"Recommended: {detected_gender} → "
+                f"{speak_profile.recommend}",
                 0.71,
             )
+        else:
+            tick(f"Speak: {speak_profile.recommend}", 0.71)
         tick("Generating clear timed Khmer voice…", 0.72)
         voice = resolve_voice(voice_label_resolved)
         narration, spoken_segments = synthesize_segments(

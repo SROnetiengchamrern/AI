@@ -1083,6 +1083,13 @@ def resolve_voice(label: str) -> str:
         "Khmer — Male (Piseth)": "km-KH-PisethNeural",
         "Female (Sreymom)": "km-KH-SreymomNeural",
         "Male (Piseth)": "km-KH-PisethNeural",
+        "Father / Man (Piseth)": "km-KH-PisethNeural",
+        "Mother / Woman (Sreymom)": "km-KH-SreymomNeural",
+        "Young man (Piseth)": "km-KH-PisethNeural",
+        "Young woman (Sreymom)": "km-KH-SreymomNeural",
+        "Young boy / Son (Piseth)": "km-KH-PisethNeural",
+        "Young girl / Daughter (Sreymom)": "km-KH-SreymomNeural",
+        "Baby (Sreymom)": "km-KH-SreymomNeural",
         VOICE_AUTO: "km-KH-SreymomNeural",
     }
     return extras.get(label, label)
