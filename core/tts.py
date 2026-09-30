@@ -640,10 +640,15 @@ def burn_khmer_overlays(
     # Always keep captions to ~1–2 lines from cleaned cues
     if repage:
         usable = split_into_two_line_cues(usable, max_chars=80)
-    width, _height = get_video_size(video_path)
+    width, height = get_video_size(video_path)
     duration = get_duration_seconds(video_path)
     if duration <= 0:
         duration = max(s.end for s in usable) + 0.5
+
+    from .khmer_render import caption_font_size
+
+    # Small video → bigger font so text stays readable when the player is small
+    font_px = caption_font_size(width, height)
 
     png_dir = output_path.parent / "sub_pngs"
     png_dir.mkdir(parents=True, exist_ok=True)
@@ -651,12 +656,12 @@ def burn_khmer_overlays(
     png_paths: list[Path] = []
     for i, seg in enumerate(usable):
         png = png_dir / f"sub_{i:04d}.png"
-        # Slightly smaller font in fast mode = quicker rasterize
         save_subtitle_png(
             seg.text,
             png,
             video_width=width,
-            font_size=max(36, width // 24),
+            video_height=height,
+            font_size=font_px,
             max_lines=2,
         )
         png_paths.append(png)

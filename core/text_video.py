@@ -1814,10 +1814,13 @@ def _caption_overlay_layer(
     if caption_en:
         blocks.append(_render_english_caption(caption_en, width=width))
     if caption_kh:
+        from .khmer_render import caption_font_size
+
+        fs = caption_font_size(width, height)
         kh_img = render_khmer_line(
             caption_kh,
-            font_size=max(34, width // 24),
-            max_width=int(width * 0.82),
+            font_size=fs,
+            max_width=int(width * 0.86),
             max_lines=2,
             prefer_two_lines=True,
             fill=(220, 30, 30, 255),

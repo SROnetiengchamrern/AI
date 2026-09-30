@@ -12,6 +12,22 @@ from PIL import Image, ImageDraw
 from .fonts import ensure_battambang_fonts
 
 
+def caption_font_size(video_width: int, video_height: int | None = None) -> int:
+    """
+    Balanced Khmer caption size (readable, not oversized).
+
+    Uses the shorter side so portrait clips stay consistent.
+    Small videos get a modest bump; large videos are capped so text
+    does not cover half the frame.
+    """
+    w = max(1, int(video_width))
+    h = max(1, int(video_height or video_width))
+    base = min(w, h)
+    # ~1/22 of short side — clear on small players, not huge on HD
+    size = max(34, base // 22)
+    return min(int(size), 58)
+
+
 def _shape(text: str, font_path: Path, font_size: int):
     """Return (glyph_ids, x_advances, x_offsets, y_offsets) in 26.6 / font units scaled to px."""
     data = font_path.read_bytes()
@@ -370,6 +386,7 @@ def save_subtitle_png(
     out_path: str | Path,
     *,
     video_width: int = 1280,
+    video_height: int | None = None,
     font_size: int | None = None,
     max_lines: int = 2,
 ) -> Path:
@@ -377,8 +394,9 @@ def save_subtitle_png(
     out_path = Path(out_path)
     out_path.parent.mkdir(parents=True, exist_ok=True)
     if font_size is None:
-        font_size = max(36, video_width // 24)
-    max_width = int(video_width * 0.82)
+        font_size = caption_font_size(video_width, video_height)
+    stroke_w = 3
+    max_width = int(video_width * 0.86)
     img = render_khmer_line(
         text,
         font_size=font_size,
@@ -387,7 +405,7 @@ def save_subtitle_png(
         prefer_two_lines=True,
         fill=(220, 30, 30, 255),
         stroke=(255, 255, 255, 255),
-        stroke_width=3,
+        stroke_width=stroke_w,
     )
     # Never wider than the video frame
     max_cap_w = int(video_width * 0.92)
