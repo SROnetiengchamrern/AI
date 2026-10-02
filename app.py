@@ -1329,7 +1329,11 @@ def build_ui() -> gr.Blocks:
                         mode = gr.Dropdown(
                             choices=list(MODES.keys()),
                             value="Khmer voice + subtitles (SPEAKS Khmer)",
-                            label="Output mode — pick a SPEAKS Khmer option to hear Khmer",
+                            label="Output mode — recommended: Khmer voice + subtitles",
+                            info=(
+                                "Recommended: Khmer voice + subtitles — speak and on-screen "
+                                "text use the same words and timing."
+                            ),
                         )
                         model = gr.Dropdown(
                             choices=list(MODELS.keys()),
@@ -1379,7 +1383,12 @@ def build_ui() -> gr.Blocks:
                         keep_original_music = gr.Checkbox(
                             label="Keep original music — ON = music from upload stays under Khmer voice",
                             value=True,
-                            info="May still trigger copyright claims if the soundtrack is not yours. Turn OFF + use soft BGM if you only have rights to the video picture.",
+                            info=(
+                                "ON (recommended for dub): keeps soundtrack under Khmer speak. "
+                                "Uses instrumental when possible; if the video is mostly speech, "
+                                "keeps a quieter copy of the original mix so music still plays. "
+                                "May still trigger copyright claims if the soundtrack is not yours."
+                            ),
                         )
                         add_music = gr.Checkbox(
                             label="Add soft procedural BGM (only if Keep original music is OFF)",
@@ -1491,6 +1500,7 @@ def build_ui() -> gr.Blocks:
                     """
                     ### Tips (Video → Khmer)
                     - **Copyright:** only convert videos you own or are licensed to use. This app cannot “fix” copyright.
+                    - **Voice + text (recommended):** use **Khmer voice + subtitles**. Captions use the **same words and times** as the Khmer speak (no mismatch). Keep **Auto ★** voice.
                     - **Voice (recommended):** keep **Auto ★ recommended**. Or pick Father / Mother / Young / Baby from the table above the dropdown.
                     - **Numbers:** Western digits in the video (`123`) become **Khmer digits on screen** (`១២៣`) and are **spoken as Khmer words** (មួយរយម្ភៃបី — រាយ/ដប់/រយ/ពាន់/ម៉ឺន/សែន/លាន).
                     - To reduce **music** claims: turn **Keep original music OFF**, enable **soft procedural BGM** (picture can still be claimed).

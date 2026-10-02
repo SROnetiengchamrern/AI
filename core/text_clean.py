@@ -49,16 +49,21 @@ def clean_khmer_text(text: str) -> str:
 
 def prepare_speak_text(text: str) -> str:
     """
-    Short pause-friendly text for Edge TTS (Khmer).
-    Numbers are spoken as Khmer words (មួយរយ…) per place-value chart,
-    while captions keep Khmer digits via clean_khmer_text.
+    Pause-friendly Khmer for Edge TTS **and** matching on-screen captions.
+
+    Voice and burned text use this same string so they stay identical.
+    Numbers become spoken Khmer words (មួយរយ…) so TTS and captions match.
     """
     t = clean_khmer_text(text)
-    # Speak: ១២៣ / 123 → មួយរយម្ភៃបី (clearer than digit glyphs)
+    # Digits → spoken words (same on screen when dubbing)
     t = expand_numbers_for_speak(t)
-    # Edge TTS reads better with a space after Khmer stop
     t = re.sub(r"។+", "។ ", t)
     return _MULTI_SPACE.sub(" ", t).strip()
+
+
+def prepare_caption_text(text: str) -> str:
+    """Alias: captions that must match spoken Khmer."""
+    return prepare_speak_text(text)
 
 
 def prepare_english_speak_text(text: str) -> str:

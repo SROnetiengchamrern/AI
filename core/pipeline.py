@@ -16,7 +16,7 @@ from .story import generate_khmer_story, story_to_timed_segments, write_story_fi
 from .subtitle import write_srt
 from .transcribe import Segment, Transcript, transcribe
 from .translate import merge_speak_segments, split_into_two_line_cues, translate_transcript
-from .text_clean import clean_khmer_text
+from .text_clean import clean_khmer_text, prepare_speak_text
 from .tts import (
     burn_subtitles,
     dub_and_burn,
@@ -135,13 +135,21 @@ def convert_video_to_khmer(
         progress_end=0.62,
     )
     tick(f"Translated {len(khmer_segments)} lines — preparing voice/subs…", 0.62)
-    # Clean + merge nearby lines for stable voice on long videos; split captions separately
+    # One text source for speak: prepare_speak_text (same words voice will say)
     speak_segments = [
-        Segment(s.start, s.end, clean_khmer_text(s.text))
+        Segment(s.start, s.end, prepare_speak_text(s.text))
         for s in khmer_segments
-        if clean_khmer_text(s.text)
+        if prepare_speak_text(s.text)
     ]
-    speak_segments = merge_speak_segments(speak_segments)
+    # Slightly shorter merges so each spoken line stays caption-friendly
+    speak_segments = merge_speak_segments(
+        speak_segments,
+        max_gap=0.55,
+        max_chars=110,
+        max_dur=7.5,
+        prep=prepare_speak_text,
+    )
+    # Subs-only modes: 2-line cues (no TTS timing yet)
     overlay_srt_segments = split_into_two_line_cues(speak_segments, max_chars=80)
 
     original_text = "\n".join(s.text for s in transcript.segments)
@@ -164,11 +172,17 @@ def convert_video_to_khmer(
         duration_hint = get_duration_seconds(video_path)
         speak_segments = story_to_timed_segments(story_text, duration_hint)
         speak_segments = [
-            Segment(s.start, s.end, clean_khmer_text(s.text))
+            Segment(s.start, s.end, prepare_speak_text(s.text))
             for s in speak_segments
-            if clean_khmer_text(s.text)
+            if prepare_speak_text(s.text)
         ]
-        speak_segments = merge_speak_segments(speak_segments)
+        speak_segments = merge_speak_segments(
+            speak_segments,
+            max_gap=0.55,
+            max_chars=110,
+            max_dur=7.5,
+            prep=prepare_speak_text,
+        )
         overlay_srt_segments = split_into_two_line_cues(speak_segments, max_chars=80)
         khmer_text = story_text
 
@@ -247,9 +261,21 @@ def convert_video_to_khmer(
             rate=speak_profile.rate,
             pitch=speak_profile.pitch,
         )
-        # Captions must use the same windows as the spoken audio
-        overlay_srt_segments = split_into_two_line_cues(spoken_segments, max_chars=80)
+        # Caption = exact spoken words + exact play times (no re-split → no mismatch)
+        overlay_srt_segments = [
+            Segment(
+                start=float(s.start),
+                end=float(s.end),
+                text=prepare_speak_text(s.text) or (s.text or "").strip(),
+            )
+            for s in spoken_segments
+            if (prepare_speak_text(s.text) or (s.text or "").strip())
+        ]
         khmer_srt = write_srt(overlay_srt_segments, work / f"{stem}_khmer.srt")
+        tick(
+            f"Voice + text aligned ({len(overlay_srt_segments)} matching lines)…",
+            0.80,
+        )
 
         if music_path:
             tick(
@@ -262,9 +288,12 @@ def convert_video_to_khmer(
                 narration,
                 music_path,
                 work / "khmer_voice_music.m4a",
-                # Original soundtrack a bit louder than soft procedural BGM
-                music_volume=0.48 if keep_original_music else 0.22,
+                # Soft film-style bed under Khmer (not loud / muddy)
+                music_volume=0.36 if keep_original_music else 0.20,
+                duck_under_voice=bool(keep_original_music),
             )
+            if keep_original_music:
+                tick("Original music mixed under Khmer voice.", 0.85)
 
         if mode == "dub_subs":
             tick("Muxing Khmer voice + burned subtitles…", 0.88)
