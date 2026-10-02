@@ -60,6 +60,53 @@ def _looks_latin(text: str) -> bool:
     return len(letters) >= max(8, len(other) * 2)
 
 
+def _khmer_char_count(text: str) -> int:
+    return len(re.findall(r"[\u1780-\u17FF]", text or ""))
+
+
+def _looks_khmer(text: str) -> bool:
+    """True when line is already Khmer (skip re-translate — keeps original speak)."""
+    kh = _khmer_char_count(text)
+    if kh < 4:
+        return False
+    latin = len(re.findall(r"[A-Za-z]", text or ""))
+    cjk = len(re.findall(r"[\u4E00-\u9FFF]", text or ""))
+    thai = len(re.findall(r"[\u0E00-\u0E7F]", text or ""))
+    return kh >= max(latin * 2, cjk * 2, thai * 2, 4)
+
+
+def _is_good_khmer(text: str) -> bool:
+    """
+    Accept only real Khmer output (reject English leftovers / empty / garbage).
+    """
+    t = (text or "").strip()
+    if not t:
+        return False
+    kh = _khmer_char_count(t)
+    if kh < 3:
+        return False
+    latin = len(re.findall(r"[A-Za-z]", t))
+    # Mostly English / mixed leftovers = bad translation
+    if latin >= 4 and kh < latin * 2:
+        return False
+    if latin > max(6, kh):
+        return False
+    return True
+
+
+def _accept_khmer(raw: str) -> str:
+    """Clean + quality-gate. Returns '' if not usable Khmer."""
+    got = clean_khmer_text(raw or "")
+    if _is_good_khmer(got):
+        return got
+    # Soft clean sometimes strips too much — try raw lightly
+    soft = (raw or "").strip()
+    soft = re.sub(r"\s+", " ", soft)
+    if _is_good_khmer(soft):
+        return clean_khmer_text(soft)
+    return ""
+
+
 def _source_candidates(source: str | None, sample_text: str = "") -> list[str]:
     """
     Prefer requested source, then auto.
@@ -71,6 +118,8 @@ def _source_candidates(source: str | None, sample_text: str = "") -> list[str]:
 
     if primary in ("zh-CN", "zh") or (has_cjk and primary == "auto"):
         ordered = ["zh-CN", "auto"]
+    elif primary in ("km", "km-KH") or _looks_khmer(sample):
+        ordered = ["km", "auto"]
     elif primary not in ("auto", "en") and _looks_latin(sample):
         ordered = ["en", "auto", primary]
     elif primary in ("ja", "ko", "th", "vi", "hi", "ur", "ar", "ru"):
@@ -147,32 +196,39 @@ def _translate_once(
     rate_limited: bool = False,
 ) -> tuple[str, bool]:
     """
-    One chunk → Khmer via Google, then MyMemory if needed.
-    Returns (khmer_text, hit_rate_limit).
+    One chunk → real Khmer via Google, then MyMemory if needed.
+    Rejects non-Khmer / English leftovers. Returns (khmer_text, hit_rate_limit).
     """
-    hit_rl = rate_limited
-    attempts = 2 if not rate_limited else 4
-    for attempt in range(attempts):
-        try:
-            got = clean_khmer_text(_google_once(text, source))
-            if got:
-                return got, hit_rl
-        except Exception as exc:
-            if _is_rate_limit(exc):
-                hit_rl = True
-                time.sleep(min(8.0, 1.2 * (attempt + 1) ** 1.3))
-            else:
-                time.sleep(0.25 * (attempt + 1))
+    text = clean_source_text(text)
+    if not text:
+        return "", rate_limited
+    # Already Khmer speech → keep (do not re-translate / distort)
+    if _looks_khmer(text):
+        return clean_khmer_text(text), rate_limited
 
-    if allow_mymemory:
-        # MyMemory after Google miss (helps when Google 429 on zh→km)
-        for attempt in range(2):
+    hit_rl = rate_limited
+    attempts = 3 if not rate_limited else 5
+    for src in _source_candidates(source, text):
+        for attempt in range(attempts):
             try:
-                got = clean_khmer_text(_mymemory_once(text, source))
+                got = _accept_khmer(_google_once(text, src))
                 if got:
                     return got, hit_rl
-            except Exception:
-                time.sleep(0.4 * (attempt + 1))
+            except Exception as exc:
+                if _is_rate_limit(exc):
+                    hit_rl = True
+                    time.sleep(min(8.0, 1.2 * (attempt + 1) ** 1.3))
+                else:
+                    time.sleep(0.25 * (attempt + 1))
+
+        if allow_mymemory:
+            for attempt in range(2):
+                try:
+                    got = _accept_khmer(_mymemory_once(text, src))
+                    if got:
+                        return got, hit_rl
+                except Exception:
+                    time.sleep(0.4 * (attempt + 1))
     return "", hit_rl
 
 
@@ -180,16 +236,19 @@ def translate_text(text: str, source: str = "auto") -> str:
     """
     Translate one string to Khmer with retries + source fallbacks + MyMemory.
     Returns "" if all attempts fail (does not raise for TranslationNotFound).
+    Keeps original when input is already Khmer.
     """
     text = clean_source_text(text)
     if not text:
         return ""
+    if _looks_khmer(text):
+        return clean_khmer_text(text)
 
     rate_limited = False
     for src in _source_candidates(source, text):
         parts: list[str] = []
         failed = False
-        for chunk in _chunk_text(text, max_chars=3500):
+        for chunk in _chunk_text(text, max_chars=2800):
             got, rate_limited = _translate_once(
                 chunk, src, rate_limited=rate_limited
             )
@@ -212,28 +271,48 @@ def _translate_batch(texts: list[str], source: str) -> tuple[list[str], bool]:
     if not any(cleaned):
         return [""] * len(texts), False
 
-    sep = "\n¶\n"
-    sample = " ".join(t for t in cleaned if t)[:240]
+    # Keep already-Khmer lines as-is (matches original speak)
+    fixed: list[str | None] = [
+        clean_khmer_text(t) if t and _looks_khmer(t) else None for t in cleaned
+    ]
+    need_idx = [i for i, f in enumerate(fixed) if f is None and cleaned[i]]
     rate_limited = False
+    if not need_idx:
+        return [f or "" for f in fixed], False
+
+    need_texts = [cleaned[i] for i in need_idx]
+    sep = "\n¶\n"
+    sample = " ".join(need_texts)[:240]
+    batch_out: dict[int, str] = {}
 
     for src in _source_candidates(source, sample):
         for attempt in range(2 if not rate_limited else 3):
             try:
-                raw = _google_once(sep.join(cleaned), src)
-                parts = [clean_khmer_text(p) for p in re.split(r"\s*¶\s*", raw)]
-                if len(parts) == len(texts) and sum(1 for p in parts if p) >= max(
-                    1, len(texts) // 2
-                ):
-                    out: list[str] = []
-                    for i, p in enumerate(parts):
-                        if p:
-                            out.append(p)
-                        else:
-                            one, rate_limited = _translate_once(
-                                cleaned[i], src, rate_limited=rate_limited
-                            )
-                            out.append(one)
-                    return out, rate_limited
+                raw = _google_once(sep.join(need_texts), src)
+                parts = [p.strip() for p in re.split(r"\s*¶\s*", raw)]
+                if len(parts) == len(need_texts):
+                    ok = 0
+                    for j, p in enumerate(parts):
+                        accepted = _accept_khmer(p)
+                        if accepted:
+                            batch_out[need_idx[j]] = accepted
+                            ok += 1
+                    if ok >= max(1, len(need_texts) // 2):
+                        # Fill misses per-line
+                        for j, idx in enumerate(need_idx):
+                            if idx not in batch_out:
+                                one, rate_limited = _translate_once(
+                                    need_texts[j], src, rate_limited=rate_limited
+                                )
+                                if one:
+                                    batch_out[idx] = one
+                        out = []
+                        for i, f in enumerate(fixed):
+                            if f is not None:
+                                out.append(f)
+                            else:
+                                out.append(batch_out.get(i, ""))
+                        return out, rate_limited
             except Exception as exc:
                 if _is_rate_limit(exc):
                     rate_limited = True
@@ -242,7 +321,10 @@ def _translate_batch(texts: list[str], source: str) -> tuple[list[str], bool]:
                     time.sleep(0.35 * (attempt + 1))
 
     out = []
-    for t in cleaned:
+    for i, t in enumerate(cleaned):
+        if fixed[i] is not None:
+            out.append(fixed[i] or "")
+            continue
         one, rate_limited = _translate_once(t, source, rate_limited=rate_limited)
         out.append(one)
     return out, rate_limited
@@ -323,9 +405,12 @@ def translate_transcript(
     progress_end: float = 0.62,
 ) -> list[Segment]:
     """
-    Translate to Khmer with timestamps.
-    Reports live progress (so UI does not freeze at 45%).
-    Missed lines are skipped; job only fails if NOTHING translates.
+    Translate to Khmer with timestamps (quality-focused).
+
+    - Already-Khmer lines are kept (not re-translated)
+    - Rejects English / non-Khmer engine leftovers
+    - Reports live progress (so UI does not freeze at 45%)
+    - Missed lines are retried; job only fails if NOTHING translates
     """
 
     def tick(msg: str, frac: float) -> None:
@@ -333,43 +418,72 @@ def translate_transcript(
             progress_cb(max(progress_start, min(progress_end, frac)), msg)
 
     src = source or transcript.language or "auto"
-    # Whisper often returns "zh"; UI may also pass "zh"
     if (src or "").startswith("zh"):
         src = "zh"
+    if (src or "").startswith("km"):
+        src = "km"
+
     sample = " ".join(s.text for s in transcript.segments[:8])
     # Title may say Hindi/Urdu but narration is often English
     if src in ("hi", "ur") and _looks_latin(sample):
         src = "en"
     elif (
-        src not in ("auto", None, "en")
+        src not in ("auto", None, "en", "km")
         and _looks_latin(sample)
         and (transcript.language or "").startswith("en")
     ):
         src = "en"
 
-    # Chinese/CJK: merge more aggressively → fewer Google calls (faster past 45%)
     is_cjk = (src or "").startswith("zh") or bool(
         re.search(r"[\u4E00-\u9FFF]", sample)
     )
-    merge_chars = 200 if is_cjk else 110
+    already_khmer = (src or "").startswith("km") or _looks_khmer(sample)
+
+    # Shorter lines = clearer Khmer (quality over max batch speed)
+    if already_khmer:
+        merge_chars = 140
+    elif is_cjk:
+        merge_chars = 160 if fast else 120
+    else:
+        merge_chars = 100 if fast else 85
+
     segs = merge_nearby_segments(transcript.segments, max_chars=merge_chars)
     if not segs:
         return []
 
     n = len(segs)
-    # Bigger batches = fewer HTTP round-trips (main reason 45% felt stuck)
+
+    # Already Khmer video — keep original speak text (best match to original)
+    if already_khmer and sum(1 for s in segs if _looks_khmer(s.text)) >= max(
+        1, (n * 2) // 3
+    ):
+        tick("Source is Khmer — keeping original speak (no re-translate)…", progress_start)
+        out_km: list[Segment] = []
+        for s in segs:
+            if _looks_khmer(s.text):
+                text = clean_khmer_text(s.text)
+            else:
+                one, _ = _translate_once(s.text, "auto")
+                text = one
+            if text and _is_good_khmer(text):
+                out_km.append(Segment(start=s.start, end=s.end, text=text))
+        tick(f"Khmer lines ready ({len(out_km)}/{n})", progress_end - 0.005)
+        if out_km:
+            return out_km
+
+    # Smaller batches when quality mode (fast OFF) — better sentence sense
     if n <= 8:
-        batch_size = 3 if fast else 2
+        batch_size = 2 if fast else 1
         pause = 0.12
     elif n <= 60:
-        batch_size = 5 if fast else 3
+        batch_size = 4 if fast else 2
         pause = 0.15
     else:
-        batch_size = 6 if fast else 3
+        batch_size = 5 if fast else 2
         pause = 0.22
 
     tick(
-        f"Translating to Khmer… 0/{n} lines"
+        f"Translating to clear Khmer… 0/{n} lines"
         + (" (Chinese → Khmer)" if is_cjk else ""),
         progress_start,
     )
@@ -387,57 +501,65 @@ def translate_transcript(
             khmer_parts = [""] * len(batch)
 
         for seg, kh in zip(batch, khmer_parts):
-            text = clean_khmer_text(kh)
+            text = kh if _is_good_khmer(kh) else ""
             if not text:
-                one, rl = _translate_once(seg.text, _normalize_source(src), rate_limited=rate_limited)
+                one, rl = _translate_once(
+                    seg.text, _normalize_source(src), rate_limited=rate_limited
+                )
                 rate_limited = rate_limited or rl
-                text = clean_khmer_text(one)
+                text = one if _is_good_khmer(one) else ""
             if text:
                 out.append(Segment(start=seg.start, end=seg.end, text=text))
             else:
                 missed.append(seg)
         done = min(n, i + len(batch))
-        # Map line progress into 45% → ~60%
-        frac = progress_start + (progress_end - progress_start - 0.03) * (done / max(1, n))
-        tick(f"Translating to Khmer… {done}/{n} lines", frac)
+        frac = progress_start + (progress_end - progress_start - 0.03) * (
+            done / max(1, n)
+        )
+        tick(f"Translating to clear Khmer… {done}/{n} lines", frac)
         time.sleep(pause if not rate_limited else pause + 0.35)
 
-    # Second pass only for misses (avoid always waiting 1.2s)
     if missed:
-        tick(f"Retrying {len(missed)} missed lines…", progress_end - 0.025)
+        tick(f"Retrying {len(missed)} lines for better Khmer…", progress_end - 0.025)
         time.sleep(0.4 if not rate_limited else 1.0)
         still: list[Segment] = []
         for idx, seg in enumerate(missed):
+            # Try auto + primary for stubborn lines
             one, rate_limited = _translate_once(
                 seg.text, _normalize_source(src), rate_limited=rate_limited
             )
-            text = clean_khmer_text(one)
+            text = one if _is_good_khmer(one) else ""
+            if not text:
+                one2, rate_limited = _translate_once(
+                    seg.text, "auto", rate_limited=rate_limited
+                )
+                text = one2 if _is_good_khmer(one2) else ""
             if text:
                 out.append(Segment(start=seg.start, end=seg.end, text=text))
             else:
                 still.append(seg)
             if idx % 3 == 0:
                 tick(
-                    f"Retrying missed lines… {idx + 1}/{len(missed)}",
+                    f"Retrying for better Khmer… {idx + 1}/{len(missed)}",
                     progress_end - 0.02,
                 )
             time.sleep(0.2 if not rate_limited else 0.45)
         missed = still
         out.sort(key=lambda s: s.start)
 
-    tick(f"Translation done ({len(out)}/{n} lines)", progress_end - 0.005)
+    tick(f"Translation done ({len(out)}/{n} clear Khmer lines)", progress_end - 0.005)
 
     if not out:
         kind = "short" if n <= 8 else "long"
         raise RuntimeError(
-            "Translation to Khmer failed (Google Translate rate limit / no results).\n"
+            "Translation to Khmer failed (no clear Khmer text).\n"
             f"This looked like a {kind} video ({n} speech lines).\n"
             "Tips:\n"
-            "• Wait 1–2 minutes and retry (Google free limit is easy to hit)\n"
-            "• Set Source language to Chinese or Auto detect\n"
+            "• Set Source language to the real spoken language (not wrong language)\n"
+            "• Wait 1–2 minutes and retry (Google free limit)\n"
+            "• Uncheck Faster encode for better line-by-line Khmer\n"
             "• Check internet connection\n"
-            "• For long videos: use Faster encode OFF, or convert in shorter parts\n"
-            f"Detail: {n} lines could not be translated."
+            f"Detail: {n} lines could not be translated to Khmer."
         )
 
     return out

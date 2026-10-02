@@ -27,21 +27,23 @@ def clean_source_text(text: str) -> str:
 def clean_khmer_text(text: str) -> str:
     """
     Clean Khmer for TTS + on-screen captions.
-    Removes leftover English words/parentheticals and normalizes punctuation.
-    Converts Western digits (0-9) → Khmer digits (០-៩) for on-screen text.
+    Keeps Khmer script; only strips leftover English when Khmer remains strong.
+    Converts Western digits (0-9) → Khmer digits (០-៩).
     """
     t = (text or "").strip()
     t = _EN_PAREN.sub(" ", t)
-    t = _BARE_ENGLISH.sub(" ", t)
+    # Strip bare English only if enough Khmer remains (avoid empty/broken lines)
+    stripped = _BARE_ENGLISH.sub(" ", t)
+    kh_before = len(re.findall(r"[\u1780-\u17FF]", t))
+    kh_after = len(re.findall(r"[\u1780-\u17FF]", stripped))
+    if kh_after >= 3 and (kh_before == 0 or kh_after >= max(3, kh_before // 2)):
+        t = stripped
     t = _BAD_PUNCT.sub(" ", t)
     t = t.replace("...", "។").replace("…", "។")
-    # Prefer Khmer full stop spacing
     t = re.sub(r"\s*។\s*", "។ ", t)
     t = _MULTI_SPACE.sub(" ", t).strip()
     t = t.strip(" |/-")
-    # Video numbers → Khmer digits on captions (១២៣ …)
     t = apply_khmer_digits_in_text(t)
-    # Ensure sentence ends cleanly for TTS
     if t and not re.search(r"[។!?]$", t):
         t += "។"
     return t

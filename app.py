@@ -1325,6 +1325,10 @@ def build_ui() -> gr.Blocks:
                             choices=list(SOURCE_LANGUAGES.values()),
                             value="Auto detect",
                             label="Source spoken language",
+                            info=(
+                                "Set the real language in the video for better Khmer. "
+                                "If the video already speaks Khmer, pick Khmer (keeps original)."
+                            ),
                         )
                         mode = gr.Dropdown(
                             choices=list(MODES.keys()),
@@ -1500,6 +1504,7 @@ def build_ui() -> gr.Blocks:
                     """
                     ### Tips (Video → Khmer)
                     - **Copyright:** only convert videos you own or are licensed to use. This app cannot “fix” copyright.
+                    - **Translate (recommended):** set **Source spoken language** to the real language in the video. If speech is already **Khmer**, pick **Khmer** (keeps original — no bad re-translate). Uncheck **Faster encode** for clearer line-by-line Khmer.
                     - **Voice + text (recommended):** use **Khmer voice + subtitles**. Captions use the **same words and times** as the Khmer speak (no mismatch). Keep **Auto ★** voice.
                     - **Voice (recommended):** keep **Auto ★ recommended**. Or pick Father / Mother / Young / Baby from the table above the dropdown.
                     - **Numbers:** Western digits in the video (`123`) become **Khmer digits on screen** (`១២៣`) and are **spoken as Khmer words** (មួយរយម្ភៃបី — រាយ/ដប់/រយ/ពាន់/ម៉ឺន/សែន/លាន).
